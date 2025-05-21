@@ -1,5 +1,5 @@
 # Crest Player
-TEST
+
 A lightweight Rust application to search and play music from YouTube. Designed for efficiency and minimal resource usage on Linux systems (e.g., Arch Linux).
 
 ## Features
