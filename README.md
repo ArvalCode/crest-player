@@ -27,9 +27,27 @@ A lightweight Rust application to search and play music from YouTube. Designed f
    ```sh
    cargo build --release
    ```
-4. Run the application:
+4. Install the application system-wide (optional, for running from anywhere):
    ```sh
-   cargo run --release
+   sudo cp target/release/crest-player /usr/local/bin/crest-player
+   ```
+
+5. Run the application:
+   ```sh
+   crest-player
+   ```
+
+## Uninstalling
+
+To completely remove Crest Player from your system:
+
+1. Remove the installed binary:
+   ```sh
+   sudo rm /usr/local/bin/crest-player
+   ```
+2. (Optional) Remove the build directory and source code if you no longer need them:
+   ```sh
+   rm -rf /home/arval/Documents/VSProjects/crest-player
    ```
 
 ## Planned

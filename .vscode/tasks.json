@@ -4,18 +4,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build",
             "type": "shell",
-            "command": "cargo build --release",
-            "group": "build",
-            "problemMatcher": ["$rustc"]
-        },
-        {
-            "label": "run",
-            "type": "shell",
-            "command": "cargo run --release",
-            "group": "test",
-            "problemMatcher": ["$rustc"]
+            "label": "crest-player run",
+            "command": "cargo run --release"
         }
     ]
 }
