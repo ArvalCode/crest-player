@@ -9,11 +9,25 @@ A lightweight Rust application to search and play music from YouTube. Designed f
 
 ## Getting Started
 1. Ensure you have Rust and Cargo installed.
-2. Build the project:
+2. Install required system dependencies:
+   - yt-dlp (YouTube downloader)
+   - ffmpeg (audio/video processing)
+
+   On Arch Linux:
+   ```sh
+   sudo pacman -S yt-dlp ffmpeg
+   ```
+   On Ubuntu/Debian:
+   ```sh
+   sudo apt update
+   sudo apt install yt-dlp ffmpeg
+   ```
+
+3. Build the project:
    ```sh
    cargo build --release
    ```
-3. Run the application:
+4. Run the application:
    ```sh
    cargo run --release
    ```

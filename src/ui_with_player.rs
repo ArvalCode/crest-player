@@ -119,7 +119,9 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
             use ratatui::text::{Span, Line};
             // Check if this song is in the library (by path)
             let is_library = app.library.iter().any(|(_, lib_path)| lib_path == path);
-            let (status, style): (&str, Style) = if is_library {
+            let (status, style): (&str, Style) = if title.ends_with("(Downloading...)") {
+                ("…", Style::default().fg(Color::Yellow))
+            } else if is_library {
                 ("●", Style::default().fg(Color::Green))
             } else if Path::new(path).exists() && std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
                 if path.ends_with(".mp3") && (path.contains("ytmusic_play_") || path.contains("ytmusic_play-")) {

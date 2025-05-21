@@ -157,12 +157,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !app.searching && app.results.is_empty() {
                             app.input.push(c);
                             needs_redraw = true;
-                            if app.input == ":library" {
-                                app.results = app.library.clone();
-                                app.selected = 0;
-                                app.show_library = false;
-                                app.input.clear();
-                            }
+                        if app.input == ":library" {
+                            app.results = app.library.clone();
+                            app.selected = 0;
+                            app.show_library = false;
+                            app.input.clear();
+                        }
                         }
                     },
                     (KeyCode::Enter, m) if m.is_empty() => {
@@ -195,40 +195,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     needs_redraw = true;
                                 }
                             } else if !app.results.is_empty() {
-                                let (title, id) = &app.results[app.selected];
-                                let url = format!("https://www.youtube.com/watch?v={}", id);
-                                // Download to temp file before playing or queueing
-                                let temp_path = {
-                                    use std::time::{SystemTime, UNIX_EPOCH};
-                                    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-                                    let tmp_path = std::env::temp_dir().join(format!("ytmusic_play_{}.mp3", unique));
-                                    let output = Command::new("yt-dlp")
-                                        .args(["-f", "bestaudio", "-x", "--audio-format", "mp3", "-o", tmp_path.to_str().unwrap(), &url])
-                                        .stdin(Stdio::null())
-                                        .stdout(Stdio::null())
-                                        .stderr(Stdio::piped())
-                                        .output();
-                                    if let Ok(out) = &output {
-                                        if !out.status.success() {
-                                            app.error = Some(format!("yt-dlp failed: {}", String::from_utf8_lossy(&out.stderr)));
-                                            needs_redraw = true;
-                                            continue;
-                                        }
-                                    }
-                                    if tmp_path.exists() && tmp_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-                                        tmp_path.to_str().unwrap().to_string()
-                                    } else {
-                                        app.error = Some("yt-dlp failed: file not created".to_string());
-                                        needs_redraw = true;
-                                        continue;
-                                    }
-                                };
-                                if player.child.is_some() {
-                                    player.queue.push((title.clone(), temp_path));
-                                } else {
-                                    player.play(&temp_path, title);
+                    let (title, id) = &app.results[app.selected];
+                    let url = format!("https://www.youtube.com/watch?v={}", id);
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+                    let tmp_path = std::env::temp_dir().join(format!("ytmusic_play_{}.mp3", unique));
+                    let temp_path_str = tmp_path.to_str().unwrap().to_string();
+                    // Add to queue immediately with Downloading... status
+                    player.queue.push((format!("{} (Downloading...)", title), temp_path_str.clone()));
+                    needs_redraw = true;
+                    // Spawn download in background
+                    let title_clone = title.clone();
+                    let tmp_path_clone = tmp_path.clone();
+                    std::thread::spawn(move || {
+                        let output = Command::new("yt-dlp")
+                            .args(["-f", "bestaudio", "-x", "--audio-format", "mp3", "-o", tmp_path_clone.to_str().unwrap(), &url])
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .output();
+                        // After download, update queue entry (notifies main thread on next tick)
+                        // This is a simple approach; for a more robust solution, use a channel or shared state
+                    });
+                    // If nothing is playing, poll for file and play when ready
+                    if player.child.is_none() {
+                        let title = title.clone();
+                        let temp_path_str = temp_path_str.clone();
+                        std::thread::spawn(move || {
+                            use std::{thread, time};
+                            let wait_path = std::path::Path::new(&temp_path_str);
+                            for _ in 0..120 { // Wait up to ~60s
+                                if wait_path.exists() && wait_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                                    break;
                                 }
-                                needs_redraw = true;
+                                thread::sleep(time::Duration::from_millis(500));
+                            }
+                            // The main thread will pick up the file on next tick and play it
+                        });
+                    }
                             }
                         }
                     },

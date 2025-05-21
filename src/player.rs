@@ -40,38 +40,25 @@ impl Player {
         // If path is in the library, use the actual file path
         let play_path = if Path::new(path).exists() && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
             path.to_string()
-        } else if path.len() == 11 && !path.contains('/') && !path.contains('.') {
-            // YouTube ID: download to temp file
-            let url = format!("https://www.youtube.com/watch?v={}", path);
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-            let tmp_path = std::env::temp_dir().join(format!("ytmusic_play_{}.mp3", unique));
-            let output = Command::new("yt-dlp")
-                .args(["-f", "bestaudio", "-x", "--audio-format", "mp3", "-o", tmp_path.to_str().unwrap(), &url])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .output();
-            if let Ok(out) = &output {
-                if !out.status.success() {
-                    self.status = format!("yt-dlp failed: {}", String::from_utf8_lossy(&out.stderr));
-                    return;
-                }
-            }
-            if tmp_path.exists() && tmp_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-                let tmp_str = tmp_path.to_str().unwrap().to_string();
-                self.last_temp_file = Some(tmp_str.clone());
-                tmp_str
-            } else {
-                self.status = format!("yt-dlp failed: file not created");
-                return;
-            }
         } else if path.contains("ytmusic_play_") && path.contains(".mp3") {
-            // If this is a temp file path, but it doesn't exist, try to find the real file in the library
-            if let Some(lib_path) = self.find_library_file(title) {
+            // If this is a temp file path, but it doesn't exist, wait for it to appear (download in progress)
+            use std::{thread, time};
+            let mut waited = 0;
+            let max_wait = 120; // up to 60 seconds
+            while waited < max_wait {
+                if Path::new(path).exists() && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
+                    break;
+                }
+                self.status = format!("Downloading...");
+                thread::sleep(time::Duration::from_millis(500));
+                waited += 1;
+            }
+            if Path::new(path).exists() && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
+                path.to_string()
+            } else if let Some(lib_path) = self.find_library_file(title) {
                 lib_path
             } else {
-                self.status = format!("File not found: {}", path);
+                self.status = format!("Download timed out: {}", path);
                 return;
             }
         } else {

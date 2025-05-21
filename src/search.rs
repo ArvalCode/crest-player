@@ -1,3 +1,4 @@
+//
 use std::process::Command;
 use std::path::PathBuf;
 use dirs::audio_dir;
@@ -5,7 +6,7 @@ use dirs::audio_dir;
 pub fn search_youtube(query: &str) -> Result<Vec<(String, String)>, String> {
     let output = Command::new("yt-dlp")
         .args([
-            format!("ytsearch5:{}", query),
+            format!("ytsearch20:{}", query), // changed from ytsearch5 to ytsearch20
             "--flat-playlist".to_string(),
             "--dump-json".to_string(),
         ])
@@ -25,7 +26,7 @@ pub fn search_youtube(query: &str) -> Result<Vec<(String, String)>, String> {
                 songs.push((title.as_str().unwrap_or("").to_string(), id.as_str().unwrap_or("").to_string()));
             }
         }
-        if songs.len() >= 5 {
+        if songs.len() >= 20 {
             break;
         }
     }
