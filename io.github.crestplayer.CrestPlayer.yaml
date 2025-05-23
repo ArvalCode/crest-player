@@ -1,0 +1,19 @@
+app-id: io.github.crestplayer.CrestPlayer
+runtime: org.freedesktop.Platform
+runtime-version: "23.08"
+sdk: org.freedesktop.Sdk
+command: crest-player
+finish-args:
+  - --share=network
+  - --filesystem=home
+  - --device=audio
+
+modules:
+  - name: crest-player
+    buildsystem: simple
+    build-commands:
+      - cargo build --release
+      - install -Dm755 target/release/crest-player /app/bin/crest-player
+    sources:
+      - type: dir
+        path: .

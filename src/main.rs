@@ -155,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Special case: if user types exactly :library, show library in results
                     (KeyCode::Char(c), m) if m.is_empty() => {
                         if !app.searching && app.results.is_empty() {
-                            app.input.push(c);
+                              app.input.push(c);
                             needs_redraw = true;
                         if app.input == ":library" {
                             app.results = app.library.clone();
