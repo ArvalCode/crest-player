@@ -1,6 +1,6 @@
 # Crest Player
 
-A lightweight Rust application to search and play music from YouTube. Designed for efficiency and minimal resource usage on Linux systems (e.g., Arch Linux).
+A barebone lightweight Rust application to search and play music from YouTube. Designed for efficiency and minimal resource usage on Linux systems (e.g., Arch Linux).
 Only uses ~350MB of Ram comparing to the ~1.3 GB of Ram that Spotify uses!
 
 ## Features
