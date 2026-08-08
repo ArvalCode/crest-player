@@ -19,7 +19,7 @@ pub struct VideoFrame {
 pub struct VideoScreensaver {
     receiver: Option<Receiver<VideoFrame>>,
     stop: Option<Arc<AtomicBool>>,
-    key: Option<(String, u16, u16)>,
+    key: Option<(String, u16, u16, u16)>,
     latest: Option<VideoFrame>,
 }
 
@@ -40,17 +40,28 @@ impl VideoScreensaver {
         position: Duration,
         width: u16,
         cell_height: u16,
+        settings: (u16, (u16, u16), bool),
     ) {
         if !visible || source.is_none() || width == 0 || cell_height == 0 {
             self.stop();
             return;
         }
+        let (fps, samples_per_cell, playback_running) = settings;
+        if !playback_running {
+            self.suspend();
+            return;
+        }
         let source = source.unwrap();
-        let pixel_height = cell_height.saturating_mul(2);
-        let key = (source.clone(), width, pixel_height);
+        let pixel_width = width.saturating_mul(samples_per_cell.0);
+        let pixel_height = cell_height.saturating_mul(samples_per_cell.1);
+        let fps = match fps {
+            30 | 60 => fps,
+            _ => 15,
+        };
+        let key = (source.clone(), pixel_width, pixel_height, fps);
         if self.key.as_ref() != Some(&key) {
             self.stop();
-            self.start(source, position, width, pixel_height);
+            self.start(source, position, pixel_width, pixel_height, fps);
         }
 
         if let Some(receiver) = &self.receiver {
@@ -71,7 +82,11 @@ impl VideoScreensaver {
         self.latest.as_ref()
     }
 
-    fn start(&mut self, source: String, position: Duration, width: u16, height: u16) {
+    pub fn restart(&mut self) {
+        self.stop();
+    }
+
+    fn start(&mut self, source: String, position: Duration, width: u16, height: u16, fps: u16) {
         let (sender, receiver) = mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -107,7 +122,7 @@ impl VideoScreensaver {
             }
 
             let filter = format!(
-                "fps=15,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+                "fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
             );
             // Account for URL resolution time so video starts at the audio clock's
             // current position rather than where it was when the worker spawned.
@@ -159,16 +174,20 @@ impl VideoScreensaver {
         });
         self.receiver = Some(receiver);
         self.stop = Some(stop);
-        self.key = Some((source, width, height));
+        self.key = Some((source, width, height, fps));
     }
 
     fn stop(&mut self) {
+        self.suspend();
+        self.latest = None;
+    }
+
+    fn suspend(&mut self) {
         if let Some(stop) = self.stop.take() {
             stop.store(true, Ordering::Relaxed);
         }
         self.receiver = None;
         self.key = None;
-        self.latest = None;
     }
 }
 

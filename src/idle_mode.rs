@@ -18,6 +18,36 @@ pub enum IdleStage {
     Cinema,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VideoRenderMode {
+    #[default]
+    AsciiFast,
+    AsciiDetailed,
+    ColorPixels,
+}
+
+impl VideoRenderMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::AsciiFast => Self::AsciiDetailed,
+            Self::AsciiDetailed => Self::ColorPixels,
+            Self::ColorPixels => Self::AsciiFast,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AsciiFast => "Video Style: ASCII FAST",
+            Self::AsciiDetailed => "Video Style: ASCII DETAILED",
+            Self::ColorPixels => "Video Style: COLOR PIXELS",
+        }
+    }
+
+    pub fn samples_per_cell(self) -> (u16, u16) {
+        (1, 2)
+    }
+}
+
 pub struct IdleMode {
     last_activity: Instant,
     stage: IdleStage,
@@ -71,7 +101,7 @@ pub fn draw_idle_mode(
     title: Option<&str>,
     position: Duration,
     video_frame: Option<&VideoFrame>,
-    ascii: bool,
+    render_mode: VideoRenderMode,
 ) {
     let area = frame.size();
     frame.render_widget(
@@ -117,15 +147,12 @@ pub fn draw_idle_mode(
                 .unwrap_or_else(|| {
                     pixel_color(x, y.saturating_mul(2).saturating_add(1), inner, seconds)
                 });
-            if ascii && video_frame.is_some() {
-                let color = blend(top, bottom);
-                spans.push(Span::styled(
-                    ascii_character(color),
-                    Style::default().fg(color).bg(Color::Black),
-                ));
-            } else {
-                spans.push(Span::styled("▀", Style::default().fg(top).bg(bottom)));
-            }
+            let span = match (render_mode, video_frame) {
+                (VideoRenderMode::AsciiFast, Some(_)) => ascii_span(top, bottom, x, y, false),
+                (VideoRenderMode::AsciiDetailed, Some(_)) => ascii_span(top, bottom, x, y, true),
+                _ => Span::styled("▀", Style::default().fg(top).bg(bottom)),
+            };
+            spans.push(span);
         }
         lines.push(Line::from(spans));
     }
@@ -179,26 +206,51 @@ fn blend(top: Color, bottom: Color) -> Color {
     }
 }
 
-fn ascii_character(color: Color) -> &'static str {
-    const RAMP: &[&str] = &[
-        " ", ".", ",", ":", ";", "i", "r", "s", "X", "A", "2", "5", "3", "h", "M", "H", "G", "S",
-        "#", "9", "B", "&", "@",
-    ];
+fn ascii_span(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> Span<'static> {
+    const FAST_RAMP: &[u8] = b" .,:;irsXA253hMHGS#9B&@";
+    const DETAILED_RAMP: &[u8] =
+        br#" .`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"#;
+    const BAYER: [[i16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let color = blend(top, bottom);
+    let mut luminance = luminance(color) as i16;
+    let ramp = if detailed {
+        luminance = (luminance + (BAYER[y as usize % 4][x as usize % 4] - 8) * 2).clamp(0, 255);
+        DETAILED_RAMP
+    } else {
+        FAST_RAMP
+    };
+    let character = ramp[luminance as usize * (ramp.len() - 1) / 255] as char;
+    Span::styled(
+        character.to_string(),
+        Style::default().fg(color).bg(Color::Black),
+    )
+}
+
+fn luminance(color: Color) -> u8 {
     let luminance = match color {
         Color::Rgb(r, g, b) => (r as usize * 2126 + g as usize * 7152 + b as usize * 722) / 10_000,
         _ => 0,
     };
-    RAMP[luminance * (RAMP.len() - 1) / 255]
+    luminance as u8
 }
 
 fn video_color(frame: &VideoFrame, x: u16, y: u16, area: Rect) -> Option<Color> {
-    if frame.width == 0 || frame.height == 0 || area.width == 0 || area.height == 0 {
+    video_color_scaled(frame, x, y, area.width, area.height.saturating_mul(2))
+}
+
+fn video_color_scaled(
+    frame: &VideoFrame,
+    x: u16,
+    y: u16,
+    target_width: u16,
+    target_height: u16,
+) -> Option<Color> {
+    if frame.width == 0 || frame.height == 0 || target_width == 0 || target_height == 0 {
         return None;
     }
-    let pixel_area_height = area.height.saturating_mul(2).max(1);
     let source_x =
-        (x as usize * frame.width as usize / area.width as usize).min(frame.width as usize - 1);
-    let source_y = (y as usize * frame.height as usize / pixel_area_height as usize)
+        (x as usize * frame.width as usize / target_width as usize).min(frame.width as usize - 1);
+    let source_y = (y as usize * frame.height as usize / target_height as usize)
         .min(frame.height as usize - 1);
     let index = (source_y * frame.width as usize + source_x) * 3;
     Some(Color::Rgb(
@@ -230,4 +282,23 @@ fn pixel_color(x: u16, y: u16, area: Rect, time: f32) -> Color {
         (20.0 + energy * 105.0) as u8,
         (45.0 + energy * 190.0) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VideoRenderMode;
+
+    #[test]
+    fn cycles_through_all_video_render_modes() {
+        let mode = VideoRenderMode::AsciiFast;
+        assert_eq!(mode.next(), VideoRenderMode::AsciiDetailed);
+        assert_eq!(mode.next().next(), VideoRenderMode::ColorPixels);
+        assert_eq!(mode.next().next().next(), mode);
+    }
+
+    #[test]
+    fn render_modes_request_half_block_resolution() {
+        assert_eq!(VideoRenderMode::AsciiDetailed.samples_per_cell(), (1, 2));
+        assert_eq!(VideoRenderMode::ColorPixels.samples_per_cell(), (1, 2));
+    }
 }

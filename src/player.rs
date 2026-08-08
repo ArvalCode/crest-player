@@ -1,6 +1,6 @@
-use std::process::{Child, Stdio, Command};
-use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 pub struct Player {
     pub child: Option<Child>,
@@ -30,45 +30,38 @@ impl Player {
     }
 
     pub fn play(&mut self, path: &str, title: &str) {
-        use std::path::Path;
         use std::fs;
+        use std::path::Path;
+        if self.child.is_some() {
+            self.queue.push((title.to_string(), path.to_string()));
+            return;
+        }
+
         // Before playing, clean up previous temp file if needed
         if let Some(last) = self.last_temp_file.take() {
             // Only delete if it is a temp streaming file (not a library file)
             if last.contains("ytmusic_play_") && last.ends_with(".mp3") {
                 let _ = fs::remove_file(&last);
+                self.video_sources.remove(&last);
             }
-        }
-
-        if self.child.is_some() {
-            // If already playing, add to queue
-            self.queue.push((title.to_string(), path.to_string()));
-            return;
         }
         self.stop();
         // If path is a local file and exists, play directly
         // If path is in the library, use the actual file path
-        let play_path = if Path::new(path).exists() && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
+        let play_path = if Path::new(path).exists()
+            && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false)
+        {
             path.to_string()
         } else if path.contains("ytmusic_play_") && path.contains(".mp3") {
-            // If this is a temp file path, but it doesn't exist, wait for it to appear (download in progress)
-            use std::{thread, time};
-            let mut waited = 0;
-            let max_wait = 120; // up to 60 seconds
-            while waited < max_wait {
-                if Path::new(path).exists() && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
-                    break;
-                }
-                self.status = format!("Downloading...");
-                thread::sleep(time::Duration::from_millis(500));
-                waited += 1;
-            }
-            if Path::new(path).exists() && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) {
-                path.to_string()
-            } else if let Some(lib_path) = self.find_library_file(title) {
+            // Downloads notify the main event loop through a channel. Never block
+            // terminal input while waiting for a partially downloaded queue item.
+            if let Some(lib_path) = self.find_library_file(title) {
                 lib_path
             } else {
-                self.status = format!("Download timed out: {}", path);
+                self.status = "Downloading...".to_string();
+                self.title = Some(title.trim_end_matches(" (Downloading...)").to_string());
+                self.current_path = Some(path.to_string());
+                self.queue.push((title.to_string(), path.to_string()));
                 return;
             }
         } else {
@@ -89,9 +82,12 @@ impl Player {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn()
-            .ok();
-        self.child = child;
+            .spawn();
+        let Ok(child) = child else {
+            self.status = "Unable to start ffplay".to_string();
+            return;
+        };
+        self.child = Some(child);
         self.current_path = Some(play_path);
         self.title = Some(title.to_string());
         self.status = "Playing".to_string();
@@ -153,10 +149,10 @@ impl Player {
         }
     }
     pub fn stop(&mut self) {
-        if let Some(child) = &mut self.child {
+        if let Some(mut child) = self.child.take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
-        self.child = None;
         self.status = "Stopped".to_string();
         self.title = None;
         self.current_path = None;
@@ -176,10 +172,12 @@ impl Player {
                     self.playback_started = None;
                     self.elapsed_before_start = Duration::default();
                     // After playback, delete temp streaming file if needed
-                    if let Some(last) = self.last_temp_file.take() {
-                        if last.contains("ytmusic_play_") && last.ends_with(".mp3") {
-                            let _ = fs::remove_file(&last);
-                        }
+                    if let Some(last) = self.last_temp_file.take()
+                        && last.contains("ytmusic_play_")
+                        && last.ends_with(".mp3")
+                    {
+                        let _ = fs::remove_file(&last);
+                        self.video_sources.remove(&last);
                     }
                     // Play next in queue if available (FIFO order)
                     if !self.queue.is_empty() {
@@ -188,7 +186,7 @@ impl Player {
                         return true;
                     }
                     false
-                },
+                }
                 Ok(None) => true,
                 Err(_) => false,
             }
@@ -199,12 +197,19 @@ impl Player {
 
     pub fn position(&self) -> Duration {
         self.elapsed_before_start
-            + self.playback_started.map(|started| started.elapsed()).unwrap_or_default()
+            + self
+                .playback_started
+                .map(|started| started.elapsed())
+                .unwrap_or_default()
     }
 
     pub fn seek_by(&mut self, seconds: i64) {
-        let Some(path) = self.current_path.clone() else { return };
-        let Some(title) = self.title.clone() else { return };
+        let Some(path) = self.current_path.clone() else {
+            return;
+        };
+        let Some(title) = self.title.clone() else {
+            return;
+        };
         let was_paused = self.status == "Paused";
         let current = self.position().as_secs_f64();
         let target = (current + seconds as f64).max(0.0);
@@ -214,7 +219,13 @@ impl Player {
             let _ = child.wait();
         }
         let child = Command::new("ffplay")
-            .args(["-ss", &format!("{target:.3}"), "-nodisp", "-autoexit", &path])
+            .args([
+                "-ss",
+                &format!("{target:.3}"),
+                "-nodisp",
+                "-autoexit",
+                &path,
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

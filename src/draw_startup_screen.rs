@@ -2,6 +2,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::layout::{Alignment, Layout, Constraint, Direction};
 use ratatui::text::{Span, Line};
 use ratatui::style::{Style, Color};
+use crate::idle_mode::VideoRenderMode;
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
 pub fn draw_startup_screen(
@@ -10,7 +11,8 @@ pub fn draw_startup_screen(
     lyrics_enabled: bool,
     live_sync_enabled: bool,
     idle_video_enabled: bool,
-    idle_video_ascii: bool,
+    idle_video_render_mode: VideoRenderMode,
+    idle_video_fps: u16,
 ) {
     // Flamingo C ASCII art (red)
     let flamingo = vec![
@@ -49,7 +51,7 @@ pub fn draw_startup_screen(
 
     let art: Vec<Line> = flamingo.iter().map(|&l| Line::from(Span::styled(l, Style::default().fg(Color::Red)))).collect();
 
-    let options = vec![
+    let options = [
         ("Stream + Downloaded Music", "Browse and stream from YouTube, plus play your downloaded music."),
         ("Downloaded Music Only", "Play only your downloaded music library."),
         (
@@ -69,8 +71,16 @@ pub fn draw_startup_screen(
             "Show the track's YouTube video after 5 seconds without input.",
         ),
         (
-            if idle_video_ascii { "Video Style: ASCII" } else { "Video Style: COLOR PIXELS" },
-            "Render video with luminance characters or true-color half blocks.",
+            idle_video_render_mode.label(),
+            "Cycle fast ASCII, detailed dithered ASCII, and color pixels.",
+        ),
+        (
+            match idle_video_fps {
+                30 => "Video FPS: 30",
+                60 => "Video FPS: 60",
+                _ => "Video FPS: 15",
+            },
+            "Cycle the music-video rendering frame rate between 15, 30, and 60 FPS.",
         ),
     ];
 

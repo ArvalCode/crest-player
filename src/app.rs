@@ -1,5 +1,6 @@
 use dirs::audio_dir;
 use crate::lyrics::LyricLine;
+use crate::idle_mode::VideoRenderMode;
 
 pub struct App {
     pub input: String,
@@ -7,7 +8,6 @@ pub struct App {
     pub selected: usize,
     pub searching: bool,
     pub error: Option<String>,
-    pub queue: Vec<(String, String)>,
     pub library: Vec<(String, String)>,
     pub show_library: bool,
     pub lyrics: Vec<LyricLine>,
@@ -18,7 +18,8 @@ pub struct App {
     pub lyrics_enabled: bool,
     pub live_sync_enabled: bool,
     pub idle_video_enabled: bool,
-    pub idle_video_ascii: bool,
+    pub idle_video_render_mode: VideoRenderMode,
+    pub idle_video_fps: u16,
 }
 
 impl App {
@@ -29,7 +30,6 @@ impl App {
             selected: 0,
             searching: false,
             error: None,
-            queue: Vec::new(),
             library: load_library(),
             show_library: false,
             lyrics: Vec::new(),
@@ -40,7 +40,8 @@ impl App {
             lyrics_enabled: true,
             live_sync_enabled: true,
             idle_video_enabled: true,
-            idle_video_ascii: true,
+            idle_video_render_mode: VideoRenderMode::AsciiFast,
+            idle_video_fps: 15,
         }
     }
 }
