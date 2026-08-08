@@ -264,7 +264,15 @@ fn ascii_span(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> Span
     const DETAILED_RAMP: &[u8] =
         br#" .`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"#;
     const BAYER: [[i16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-    let color = blend(top, bottom);
+    // Fast mode favors temporal stability: tiny decoder noise should not make a
+    // terminal cell look "new" every frame. Five bits per channel retains
+    // 32,768 colors while giving Ratatui and the terminal many more unchanged
+    // cells and adjacent style runs. Detailed mode remains completely untouched.
+    let color = if detailed {
+        blend(top, bottom)
+    } else {
+        stabilize_color(blend(top, bottom))
+    };
     let mut luminance = luminance(color) as i16;
     let ramp = if detailed {
         luminance = (luminance + (BAYER[y as usize % 4][x as usize % 4] - 8) * 2).clamp(0, 255);
@@ -277,6 +285,22 @@ fn ascii_span(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> Span
         character.to_string(),
         Style::default().fg(color).bg(Color::Black),
     )
+}
+
+fn stabilize_color(color: Color) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            quantize_channel(r),
+            quantize_channel(g),
+            quantize_channel(b),
+        ),
+        color => color,
+    }
+}
+
+fn quantize_channel(value: u8) -> u8 {
+    const STEP: u16 = 8;
+    (((u16::from(value) + STEP / 2) / STEP) * STEP).min(255) as u8
 }
 
 fn luminance(color: Color) -> u8 {
@@ -339,7 +363,8 @@ fn pixel_color(x: u16, y: u16, area: Rect, time: f32) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::VideoRenderMode;
+    use super::{VideoRenderMode, quantize_channel, stabilize_color};
+    use ratatui::style::Color;
 
     #[test]
     fn cycles_through_all_video_render_modes() {
@@ -353,5 +378,16 @@ mod tests {
     fn render_modes_request_half_block_resolution() {
         assert_eq!(VideoRenderMode::AsciiDetailed.samples_per_cell(), (1, 2));
         assert_eq!(VideoRenderMode::ColorPixels.samples_per_cell(), (1, 2));
+    }
+
+    #[test]
+    fn fast_ascii_color_stabilization_is_visually_bounded() {
+        for value in 0..=u8::MAX {
+            assert!(quantize_channel(value).abs_diff(value) <= 4);
+        }
+        assert_eq!(
+            stabilize_color(Color::Rgb(101, 149, 203)),
+            Color::Rgb(104, 152, 200)
+        );
     }
 }

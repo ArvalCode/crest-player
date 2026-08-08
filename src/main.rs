@@ -11,10 +11,18 @@ mod idle_mode;
 mod video_screensaver;
 
 
-use std::io;
+use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
-use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
+use crossterm::{
+    ExecutableCommand,
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
+    execute,
+    terminal::{
+        BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
+        LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    },
+};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 use app::{App, save_library, save_settings};
@@ -26,6 +34,73 @@ use search::{search_youtube, download_audio};
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use idle_mode::{draw_idle_mode, IdleMode};
 use video_screensaver::VideoScreensaver;
+
+struct FramePacer {
+    fps: u16,
+    configured_fps: u16,
+    fast_frames: u16,
+}
+
+impl FramePacer {
+    fn new() -> Self {
+        Self {
+            fps: 60,
+            configured_fps: 60,
+            fast_frames: 0,
+        }
+    }
+
+    fn target(&mut self, configured: u16) -> u16 {
+        if self.configured_fps != configured {
+            self.configured_fps = configured;
+            self.fps = configured;
+            self.fast_frames = 0;
+        }
+        self.fps = self.fps.min(configured).max(15);
+        self.fps
+    }
+
+    fn record(&mut self, render_time: Duration, configured: u16) {
+        let budget = Duration::from_micros(1_000_000 / u64::from(self.fps));
+        if render_time >= budget.mul_f32(0.85) {
+            self.fps = match self.fps {
+                60 => 30,
+                30 => 15,
+                value => value,
+            };
+            self.fast_frames = 0;
+        } else if render_time <= budget.mul_f32(0.45) {
+            self.fast_frames = self.fast_frames.saturating_add(1);
+            if self.fast_frames >= 120 {
+                self.fps = match self.fps {
+                    15 if configured >= 30 => 30,
+                    30 if configured >= 60 => 60,
+                    value => value,
+                };
+                self.fast_frames = 0;
+            }
+        } else {
+            self.fast_frames = 0;
+        }
+    }
+}
+
+fn draw_synchronized<W, F>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    render: F,
+) -> io::Result<()>
+where
+    W: Write,
+    F: FnOnce(&mut ratatui::Frame),
+{
+    terminal.backend_mut().execute(BeginSynchronizedUpdate)?;
+    let draw_result = terminal.draw(render).map(|_| ());
+    let end_result = terminal
+        .backend_mut()
+        .execute(EndSynchronizedUpdate)
+        .map(|_| ());
+    draw_result.and(end_result)
+}
 
 struct DownloadFinished {
     title: String,
@@ -169,7 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(BufWriter::with_capacity(1024 * 1024, stdout));
     let mut terminal = Terminal::new(backend)?;
     let mut app = App::new();
     let mut player = Player::new();
@@ -177,6 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut needs_redraw = true;
     let mut idle_mode = IdleMode::new();
     let mut video_screensaver = VideoScreensaver::new();
+    let mut frame_pacer = FramePacer::new();
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadFinished>();
     let (video_prefetch_tx, video_prefetch_rx) =
@@ -206,7 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut video_screensaver,
         );
         player.is_playing();
-        terminal.draw(|f| draw_startup_screen(
+        draw_synchronized(&mut terminal, |f| draw_startup_screen(
             f,
             (
                 settings_page,
@@ -339,8 +415,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         );
         if needs_redraw {
+            let render_started = Instant::now();
             if idle_mode.is_visible() {
-                terminal.draw(|f| draw_idle_mode(
+                draw_synchronized(&mut terminal, |f| draw_idle_mode(
                     f,
                     idle_mode.stage(),
                     player.title.as_deref(),
@@ -373,15 +450,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 ))?;
             } else if downloaded_only_mode {
-                terminal.draw(|f| ui_downloaded_only::ui_downloaded_only(f, &app, &player))?;
+                draw_synchronized(&mut terminal, |f| {
+                    ui_downloaded_only::ui_downloaded_only(f, &app, &player)
+                })?;
             } else {
-                terminal.draw(|f| ui_with_player(f, &app, &player))?;
+                draw_synchronized(&mut terminal, |f| ui_with_player(f, &app, &player))?;
+            }
+            if idle_mode.is_visible() {
+                frame_pacer.record(render_started.elapsed(), app.idle_video_fps);
             }
             needs_redraw = false;
         }
 
         let tick_rate = if idle_mode.is_visible() {
-            Duration::from_micros(1_000_000 / u64::from(app.idle_video_fps))
+            Duration::from_micros(1_000_000 / u64::from(frame_pacer.target(app.idle_video_fps)))
         } else {
             Duration::from_millis(100)
         };
