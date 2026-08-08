@@ -9,6 +9,8 @@ pub fn draw_startup_screen(
     selected: usize,
     lyrics_enabled: bool,
     live_sync_enabled: bool,
+    idle_video_enabled: bool,
+    idle_video_ascii: bool,
 ) {
     // Flamingo C ASCII art (red)
     let flamingo = vec![
@@ -61,6 +63,14 @@ pub fn draw_startup_screen(
             } else {
                 "Enable Lyrics first to use live synchronization."
             },
+        ),
+        (
+            if idle_video_enabled { "YouTube Screensaver: ON" } else { "YouTube Screensaver: OFF" },
+            "Show the track's YouTube video after 5 seconds without input.",
+        ),
+        (
+            if idle_video_ascii { "Video Style: ASCII" } else { "Video Style: COLOR PIXELS" },
+            "Render video with luminance characters or true-color half blocks.",
         ),
     ];
 

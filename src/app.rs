@@ -17,6 +17,8 @@ pub struct App {
     pub lyrics_scroll: u16,
     pub lyrics_enabled: bool,
     pub live_sync_enabled: bool,
+    pub idle_video_enabled: bool,
+    pub idle_video_ascii: bool,
 }
 
 impl App {
@@ -37,6 +39,8 @@ impl App {
             lyrics_scroll: 0,
             lyrics_enabled: true,
             live_sync_enabled: true,
+            idle_video_enabled: true,
+            idle_video_ascii: true,
         }
     }
 }

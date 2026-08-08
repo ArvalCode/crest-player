@@ -6,33 +6,39 @@ mod ui_downloaded_only;
 mod draw_startup_screen;
 mod lyrics;
 mod search;
+mod idle_mode;
+mod video_screensaver;
 
 
 use std::io;
 use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
-use crossterm::{event::{self, Event, KeyCode}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
+use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 use app::{App, save_library};
 use player::Player;
 use lyrics::{Lyrics, fetch_lyrics};
 use ui_with_player::ui_with_player;
-use ui_downloaded_only::ui_downloaded_only;
 use draw_startup_screen::draw_startup_screen;
 use search::{search_youtube, download_audio};
+use idle_mode::{draw_idle_mode, IdleMode};
+use video_screensaver::VideoScreensaver;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut app = App::new();
     let mut player = Player::new();
     let mut last_tick = Instant::now();
-    let tick_rate = Duration::from_millis(400);
+    // Match the video decoder's fixed 15 FPS output cadence.
+    let tick_rate = Duration::from_micros(1_000_000 / 15);
     let mut needs_redraw = true;
+    let mut idle_mode = IdleMode::new();
+    let mut video_screensaver = VideoScreensaver::new();
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let mut lyrics_requested_for: Option<String> = None;
     let mut lyrics_requested_at: Option<Instant> = None;
@@ -48,15 +54,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             startup_selected,
             app.lyrics_enabled,
             app.live_sync_enabled,
+            app.idle_video_enabled,
+            app.idle_video_ascii,
         ))?;
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Up => {
-                        startup_selected = startup_selected.checked_sub(1).unwrap_or(3);
+                        startup_selected = startup_selected.checked_sub(1).unwrap_or(5);
                     }
                     KeyCode::Down => {
-                        startup_selected = (startup_selected + 1) % 4;
+                        startup_selected = (startup_selected + 1) % 6;
                     }
                     KeyCode::Enter => {
                         match startup_selected {
@@ -74,6 +82,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.live_sync_enabled = !app.live_sync_enabled;
                                 app.lyrics_active = None;
                                 app.lyrics_scroll = 0;
+                            }
+                            4 => {
+                                app.idle_video_enabled = !app.idle_video_enabled;
+                                idle_mode.note_activity();
+                            }
+                            5 => {
+                                app.idle_video_ascii = !app.idle_video_ascii;
                             }
                             _ => {}
                         }
@@ -103,8 +118,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     loop {
+        if idle_mode.update(app.idle_video_enabled && player.status == "Playing") {
+            needs_redraw = true;
+        }
+        let screen = terminal.size()?;
+        video_screensaver.update(
+            idle_mode.is_visible(),
+            player.video_source(),
+            player.position(),
+            screen.width,
+            screen.height,
+        );
         if needs_redraw {
-            if downloaded_only_mode {
+            if idle_mode.is_visible() {
+                terminal.draw(|f| draw_idle_mode(
+                    f,
+                    idle_mode.stage(),
+                    player.title.as_deref(),
+                    player.position(),
+                    video_screensaver.frame(),
+                    app.idle_video_ascii,
+                ))?;
+            } else if downloaded_only_mode {
                 terminal.draw(|f| ui_downloaded_only::ui_downloaded_only(f, &app, &player))?;
             } else {
                 terminal.draw(|f| ui_with_player(f, &app, &player))?;
@@ -116,12 +151,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+            let input_event = event::read()?;
+            let was_idle = idle_mode.is_visible();
+            let is_mouse_move = matches!(
+                &input_event,
+                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved
+            );
+            if is_mouse_move {
+                // Pointer motion alone should not reset inactivity or dismiss the
+                // screensaver. Clicks and scrolling remain intentional input.
+                continue;
+            }
+            idle_mode.note_activity();
+            needs_redraw = true;
+            // Waking the UI consumes the event so a stray key cannot also edit,
+            // seek, or activate the currently selected item.
+            if was_idle {
+                continue;
+            }
+            if let Event::Key(key) = input_event {
                 needs_redraw = true;
                 if downloaded_only_mode {
                     // Only allow navigation and playback in the downloaded songs list (results panel)
                     match (key.code, key.modifiers) {
-                        (KeyCode::Backspace, m) if m.is_empty() => {
+                        (KeyCode::Backspace, m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
                             player.stop();
                             player.queue.clear();
                             app.lyrics.clear();
@@ -137,10 +190,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::PageUp, m) if m.is_empty() => {
                             app.lyrics_scroll = app.lyrics_scroll.saturating_sub(5);
                         },
-                        (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                             player.seek_by(5);
                         },
-                        (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                             player.seek_by(-5);
                         },
                         (KeyCode::Down, m) if m.is_empty() => {
@@ -205,7 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 match (key.code, key.modifiers) {
-                    (KeyCode::Backspace, m) if m.is_empty() => {
+                    (KeyCode::Backspace, m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
                         player.stop();
                         player.queue.clear();
                         app.lyrics.clear();
@@ -221,10 +274,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (KeyCode::PageUp, m) if m.is_empty() => {
                         app.lyrics_scroll = app.lyrics_scroll.saturating_sub(5);
                     },
-                    (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                         player.seek_by(5);
                     },
-                    (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                         player.seek_by(-5);
                     },
                     // Special case: if user types exactly :library, show library in results
@@ -276,6 +329,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
                     let tmp_path = std::env::temp_dir().join(format!("ytmusic_play_{}.mp3", unique));
                     let temp_path_str = tmp_path.to_str().unwrap().to_string();
+                    player.register_video_source(&temp_path_str, &url);
                     // Add to queue immediately with Downloading... status
                     player.queue.push((format!("{} (Downloading...)", title), temp_path_str.clone()));
                     needs_redraw = true;
@@ -357,6 +411,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
                             let tmp_path = std::env::temp_dir().join(format!("ytmusic_play_{}.mp3", unique));
                             let temp_path_str = tmp_path.to_str().unwrap().to_string();
+                            player.register_video_source(&temp_path_str, &url);
                             // Add to queue immediately
                             player.queue.push((title.clone(), temp_path_str.clone()));
                             // Spawn download in background
@@ -521,13 +576,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
-            // Optionally, force redraw every N ticks for safety (not strictly needed)
+            if idle_mode.is_visible() {
+                needs_redraw = true;
+            }
         }
     }
     }
 // Save and load library to a file in the Music directory
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
+    execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
 
     // (Performance summary output removed)
     Ok(())

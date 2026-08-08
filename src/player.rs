@@ -1,5 +1,6 @@
 use std::process::{Child, Stdio, Command};
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 pub struct Player {
     pub child: Option<Child>,
@@ -10,6 +11,7 @@ pub struct Player {
     playback_started: Option<Instant>,
     elapsed_before_start: Duration,
     current_path: Option<String>,
+    video_sources: HashMap<String, String>,
 }
 
 impl Player {
@@ -23,6 +25,7 @@ impl Player {
             playback_started: None,
             elapsed_before_start: Duration::default(),
             current_path: None,
+            video_sources: HashMap::new(),
         }
     }
 
@@ -94,6 +97,22 @@ impl Player {
         self.status = "Playing".to_string();
         self.elapsed_before_start = Duration::default();
         self.playback_started = Some(Instant::now());
+    }
+
+    pub fn register_video_source(&mut self, audio_path: &str, youtube_url: &str) {
+        self.video_sources
+            .insert(audio_path.to_string(), youtube_url.to_string());
+    }
+
+    pub fn video_source(&self) -> Option<String> {
+        let title = self.title.as_ref()?;
+        Some(
+            self.current_path
+                .as_ref()
+                .and_then(|path| self.video_sources.get(path))
+                .cloned()
+                .unwrap_or_else(|| format!("ytsearch1:{title} official music video")),
+        )
     }
 
     /// Try to find a library file by title (for fallback if temp file is missing)
