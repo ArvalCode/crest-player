@@ -1,5 +1,7 @@
 use ib_romaji::HepburnRomanizer;
 use serde::Deserialize;
+use serde_json::Value;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -46,7 +48,10 @@ pub fn fetch_lyrics(title: &str) -> Result<Lyrics, String> {
     if let Some(synced) = result.synced_lyrics {
         let lines = parse_synced_lyrics(&synced);
         if !lines.is_empty() {
-            return Ok(Lyrics { lines, synced: true });
+            return Ok(Lyrics {
+                lines,
+                synced: true,
+            });
         }
     }
 
@@ -57,6 +62,174 @@ pub fn fetch_lyrics(title: &str) -> Result<Lyrics, String> {
         lines: add_romaji(&plain, false),
         synced: false,
     })
+}
+
+pub fn fetch_lyrics_with_caption_fallback(
+    title: &str,
+    video_source: &str,
+) -> Result<Lyrics, String> {
+    fetch_lyrics(title).or_else(|lyrics_error| {
+        fetch_video_captions(video_source).map_err(|caption_error| {
+            format!("{lyrics_error} Caption fallback also failed: {caption_error}")
+        })
+    })
+}
+
+fn fetch_video_captions(video_source: &str) -> Result<Lyrics, String> {
+    let output = Command::new("yt-dlp")
+        .args(["-J", "--playlist-items", "1", "--no-warnings", video_source])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|error| format!("Could not inspect video captions: {error}"))?;
+    if !output.status.success() {
+        return Err("yt-dlp could not inspect video captions.".to_string());
+    }
+    let root: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Invalid video metadata: {error}"))?;
+    let video = root
+        .get("entries")
+        .and_then(Value::as_array)
+        .and_then(|entries| entries.first())
+        .unwrap_or(&root);
+    let track = select_caption_track(video)
+        .ok_or_else(|| "This video has no usable captions.".to_string())?;
+    let contents = if let Some(data) = track.get("data").and_then(Value::as_str) {
+        data.to_string()
+    } else {
+        let url = track
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Caption metadata did not contain a URL.".to_string())?;
+        reqwest::blocking::Client::new()
+            .get(url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .and_then(|response| response.error_for_status())
+            .and_then(|response| response.text())
+            .map_err(|error| format!("Could not download video captions: {error}"))?
+    };
+    let lines = parse_webvtt(&contents);
+    if lines.is_empty() {
+        Err("Video captions contained no readable timed lines.".to_string())
+    } else {
+        Ok(Lyrics {
+            lines,
+            synced: true,
+        })
+    }
+}
+
+fn select_caption_track(video: &Value) -> Option<&Value> {
+    ["subtitles", "automatic_captions"]
+        .into_iter()
+        .filter_map(|field| video.get(field)?.as_object())
+        .find_map(|languages| {
+            let language = languages
+                .get("en")
+                .or_else(|| {
+                    languages
+                        .iter()
+                        .find(|(key, _)| key.starts_with("en-"))
+                        .map(|(_, value)| value)
+                })
+                .or_else(|| {
+                    languages
+                        .iter()
+                        .find(|(key, _)| key.as_str() != "live_chat")
+                        .map(|(_, value)| value)
+                })?;
+            language
+                .as_array()?
+                .iter()
+                .find(|format| format.get("ext").and_then(Value::as_str) == Some("vtt"))
+        })
+}
+
+fn parse_webvtt(captions: &str) -> Vec<LyricLine> {
+    let japanese = captions.chars().any(is_japanese);
+    let romanizer = japanese.then(HepburnRomanizer::default);
+    let mut lines = Vec::new();
+    let mut input = captions.lines().peekable();
+    while let Some(line) = input.next() {
+        let Some((start, _)) = line.split_once(" --> ") else {
+            continue;
+        };
+        let Some(timestamp) = parse_caption_timestamp(start.trim()) else {
+            continue;
+        };
+        let mut text = String::new();
+        while let Some(next) = input.peek() {
+            if next.trim().is_empty() {
+                input.next();
+                break;
+            }
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(next.trim());
+            input.next();
+        }
+        let text = clean_caption_text(&text);
+        if text.is_empty()
+            || lines
+                .last()
+                .is_some_and(|line: &LyricLine| line.text == text)
+        {
+            continue;
+        }
+        let romaji = text
+            .chars()
+            .any(is_japanese)
+            .then(|| romanize(&text, romanizer.as_ref().unwrap()));
+        lines.push(LyricLine {
+            timestamp: Some(timestamp),
+            text,
+            romaji,
+        });
+    }
+    lines
+}
+
+fn parse_caption_timestamp(value: &str) -> Option<Duration> {
+    let parts: Vec<&str> = value.split(':').collect();
+    let (hours, minutes, seconds) = match parts.as_slice() {
+        [minutes, seconds] => (
+            0,
+            minutes.parse::<u64>().ok()?,
+            seconds.parse::<f64>().ok()?,
+        ),
+        [hours, minutes, seconds] => (
+            hours.parse::<u64>().ok()?,
+            minutes.parse::<u64>().ok()?,
+            seconds.parse::<f64>().ok()?,
+        ),
+        _ => return None,
+    };
+    Some(Duration::from_secs_f64(
+        hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds,
+    ))
+}
+
+fn clean_caption_text(value: &str) -> String {
+    let mut output = String::new();
+    let mut inside_tag = false;
+    for character in value.chars() {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => output.push(character),
+            _ => {}
+        }
+    }
+    output
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn parse_synced_lyrics(lyrics: &str) -> Vec<LyricLine> {
@@ -75,7 +248,11 @@ fn parse_synced_lyrics(lyrics: &str) -> Vec<LyricLine> {
                 .chars()
                 .any(is_japanese)
                 .then(|| romanize(&text, romanizer.as_ref().unwrap()));
-            Some(LyricLine { timestamp: Some(timestamp), text, romaji })
+            Some(LyricLine {
+                timestamp: Some(timestamp),
+                text,
+                romaji,
+            })
         })
         .collect()
 }
@@ -94,7 +271,10 @@ fn add_romaji(lyrics: &str, timestamps: bool) -> Vec<LyricLine> {
         .lines()
         .filter(|line| !japanese_song || line.chars().any(is_japanese))
         .map(|line| {
-            let romaji = line.chars().any(is_japanese).then(|| romanize(line, &romanizer));
+            let romaji = line
+                .chars()
+                .any(is_japanese)
+                .then(|| romanize(line, &romanizer));
             LyricLine {
                 timestamp: timestamps.then(Duration::default),
                 text: line.to_string(),
@@ -172,5 +352,15 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].timestamp, Some(Duration::from_millis(65_000)));
         assert!(result[0].romaji.is_some());
+    }
+
+    #[test]
+    fn parses_and_cleans_webvtt_captions() {
+        let captions = "WEBVTT\n\n00:00:01.250 --> 00:00:03.000\n<c>Hello &amp; welcome</c>\n\n00:00:03.000 --> 00:00:04.000\n<c>Hello &amp; welcome</c>\n\n00:00:04.500 --> 00:00:06.000\nNext line\n";
+        let result = parse_webvtt(captions);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].timestamp, Some(Duration::from_millis(1_250)));
+        assert_eq!(result[0].text, "Hello & welcome");
+        assert_eq!(result[1].text, "Next line");
     }
 }

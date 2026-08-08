@@ -19,7 +19,7 @@ use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 use app::{App, save_library, save_settings};
 use player::Player;
-use lyrics::{Lyrics, fetch_lyrics};
+use lyrics::{Lyrics, fetch_lyrics_with_caption_fallback};
 use ui_with_player::ui_with_player;
 use draw_startup_screen::draw_startup_screen;
 use search::{search_youtube, download_audio};
@@ -713,8 +713,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.lyrics_active = None;
                 app.lyrics_scroll = 0;
                 let tx = lyrics_tx.clone();
+                let video_source = player.video_source().unwrap_or_else(|| {
+                    format!("ytsearch1:{clean_title} official music video")
+                });
                 std::thread::spawn(move || {
-                    let result = std::panic::catch_unwind(|| fetch_lyrics(&clean_title))
+                    let result = std::panic::catch_unwind(|| {
+                        fetch_lyrics_with_caption_fallback(&clean_title, &video_source)
+                    })
                         .unwrap_or_else(|_| Err("Lyrics processing failed unexpectedly.".to_string()));
                     let _ = tx.send((clean_title, result));
                 });

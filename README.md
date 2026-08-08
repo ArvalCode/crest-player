@@ -15,6 +15,8 @@ ASCII music-video display when left idle.
 - Stream audio through `yt-dlp` and `ffplay` or play a downloaded-only library.
 - Download and save favorite tracks locally.
 - Display synchronized lyrics with optional Japanese romaji.
+- Fall back to timed manual or automatic YouTube video captions when the lyrics
+  service has no result.
 - Show available Latin-letter pronunciation lines alongside original lyrics with
   the default-on **English Pronunciations** Home setting.
 - Overlay the current synchronized lyric and a preview of the next line throughout
