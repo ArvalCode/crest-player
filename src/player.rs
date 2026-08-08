@@ -111,6 +111,16 @@ impl Player {
         )
     }
 
+    pub fn current_video_id(&self) -> Option<String> {
+        let source = self
+            .current_path
+            .as_ref()
+            .and_then(|path| self.video_sources.get(path))?;
+        source
+            .split_once("v=")
+            .map(|(_, value)| value.split('&').next().unwrap_or(value).to_string())
+    }
+
     /// Try to find a library file by title (for fallback if temp file is missing)
     pub fn find_library_file(&self, title: &str) -> Option<String> {
         if let Some(dir) = dirs::audio_dir() {

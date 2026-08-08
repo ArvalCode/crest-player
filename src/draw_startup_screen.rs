@@ -10,10 +10,10 @@ pub fn draw_startup_screen(
     selected: usize,
     lyrics_enabled: bool,
     live_sync_enabled: bool,
-    idle_video_enabled: bool,
-    idle_video_render_mode: VideoRenderMode,
-    idle_video_fps: u16,
+    video_settings: (bool, VideoRenderMode, u16),
+    autoplay_enabled: bool,
 ) {
+    let (idle_video_enabled, idle_video_render_mode, idle_video_fps) = video_settings;
     // Flamingo C ASCII art (red)
     let flamingo = vec![
     r"                                            *******,           /#,",
@@ -81,6 +81,14 @@ pub fn draw_startup_screen(
                 _ => "Video FPS: 15",
             },
             "Cycle the music-video rendering frame rate between 15, 30, and 60 FPS.",
+        ),
+        (
+            if autoplay_enabled {
+                "Autoplay: ON"
+            } else {
+                "Autoplay: OFF"
+            },
+            "Prefetch a YouTube Mix recommendation whenever your queue is empty.",
         ),
     ];
 

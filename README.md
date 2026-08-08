@@ -20,6 +20,8 @@ ASCII music-video display when left idle.
 - Disable the YouTube screensaver, select its rendering style, or change its FPS from Home.
 - Wake on keyboard input, mouse clicks, or scrolling. Mouse movement alone is ignored.
 - Fall back to a procedural terminal animation while video loads or is unavailable.
+- Optionally prefetch a related YouTube Mix track when the queue is empty with
+  **Autoplay**. Manually queued tracks always take priority.
 
 ## Controls
 

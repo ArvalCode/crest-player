@@ -6,6 +6,7 @@ mod ui_downloaded_only;
 mod draw_startup_screen;
 mod lyrics;
 mod search;
+mod recommendations;
 mod idle_mode;
 mod video_screensaver;
 
@@ -22,6 +23,7 @@ use lyrics::{Lyrics, fetch_lyrics};
 use ui_with_player::ui_with_player;
 use draw_startup_screen::draw_startup_screen;
 use search::{search_youtube, download_audio};
+use recommendations::{Recommendation, youtube_mix_recommendation};
 use idle_mode::{draw_idle_mode, IdleMode};
 use video_screensaver::VideoScreensaver;
 
@@ -98,6 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut video_screensaver = VideoScreensaver::new();
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadFinished>();
+    let (recommendation_tx, recommendation_rx) =
+        std::sync::mpsc::channel::<(String, Result<Recommendation, String>)>();
+    let mut autoplay_requested_for: Option<String>;
     let mut lyrics_requested_for: Option<String> = None;
     let mut lyrics_requested_at: Option<Instant> = None;
 
@@ -112,18 +117,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             startup_selected,
             app.lyrics_enabled,
             app.live_sync_enabled,
-            app.idle_video_enabled,
-            app.idle_video_render_mode,
-            app.idle_video_fps,
+            (
+                app.idle_video_enabled,
+                app.idle_video_render_mode,
+                app.idle_video_fps,
+            ),
+            app.autoplay_enabled,
         ))?;
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Up => {
-                        startup_selected = startup_selected.checked_sub(1).unwrap_or(6);
+                        startup_selected = startup_selected.checked_sub(1).unwrap_or(7);
                     }
                     KeyCode::Down => {
-                        startup_selected = (startup_selected + 1) % 7;
+                        startup_selected = (startup_selected + 1) % 8;
                     }
                     KeyCode::Enter => {
                         match startup_selected {
@@ -156,6 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     _ => 15,
                                 };
                             }
+                            7 => {
+                                app.autoplay_enabled = !app.autoplay_enabled;
+                            }
                             _ => {}
                         }
                     }
@@ -181,6 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.show_library = false;
         app.selected = 0;
     }
+    autoplay_requested_for = None;
 
     loop {
         let playback_keeps_idle_view = player.status == "Playing"
@@ -579,9 +591,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 needs_redraw = true;
             }
         }
+        while let Ok((seed_title, result)) = recommendation_rx.try_recv() {
+            if app.autoplay_enabled
+                && player.title.as_ref() == Some(&seed_title)
+                && player.queue.is_empty()
+                && let Ok(recommendation) = result
+            {
+                queue_youtube_download(
+                    &mut player,
+                    &download_tx,
+                    &recommendation.title,
+                    &recommendation.video_id,
+                );
+                needs_redraw = true;
+            }
+        }
         let playing_changed = player.is_playing();
         if playing_changed {
             needs_redraw = true;
+        }
+
+        if app.autoplay_enabled && player.status == "Playing" {
+            if let Some(title) = player.title.clone()
+                && autoplay_requested_for.as_ref() != Some(&title)
+                && player.queue.is_empty()
+            {
+                autoplay_requested_for = Some(title.clone());
+                let video_id = player.current_video_id();
+                let tx = recommendation_tx.clone();
+                std::thread::spawn(move || {
+                    let result = youtube_mix_recommendation(&title, video_id.as_deref());
+                    let _ = tx.send((title, result));
+                });
+            }
+        } else if player.title.is_none() {
+            autoplay_requested_for = None;
         }
 
         if app.lyrics_enabled {

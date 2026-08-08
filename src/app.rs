@@ -20,6 +20,7 @@ pub struct App {
     pub idle_video_enabled: bool,
     pub idle_video_render_mode: VideoRenderMode,
     pub idle_video_fps: u16,
+    pub autoplay_enabled: bool,
 }
 
 impl App {
@@ -42,6 +43,7 @@ impl App {
             idle_video_enabled: true,
             idle_video_render_mode: VideoRenderMode::AsciiFast,
             idle_video_fps: 15,
+            autoplay_enabled: false,
         }
     }
 }
