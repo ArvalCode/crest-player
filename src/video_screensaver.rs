@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::Read,
     process::{Command, Stdio},
     sync::{
@@ -14,6 +15,7 @@ pub struct VideoFrame {
     pub width: u16,
     pub height: u16,
     pub pixels: Vec<u8>,
+    presentation_time: Duration,
 }
 
 pub struct VideoScreensaver {
@@ -21,6 +23,12 @@ pub struct VideoScreensaver {
     stop: Option<Arc<AtomicBool>>,
     key: Option<(String, u16, u16, u16)>,
     latest: Option<VideoFrame>,
+    buffer: VecDeque<VideoFrame>,
+    buffer_target: usize,
+    buffer_limit: usize,
+    buffering: bool,
+    frame_interval: Duration,
+    next_frame_at: Option<Instant>,
 }
 
 impl VideoScreensaver {
@@ -30,6 +38,12 @@ impl VideoScreensaver {
             stop: None,
             key: None,
             latest: None,
+            buffer: VecDeque::new(),
+            buffer_target: 1,
+            buffer_limit: 1,
+            buffering: true,
+            frame_interval: Duration::from_millis(66),
+            next_frame_at: None,
         }
     }
 
@@ -64,17 +78,62 @@ impl VideoScreensaver {
             self.start(source, position, pixel_width, pixel_height, fps);
         }
 
+        let mut disconnected = false;
         if let Some(receiver) = &self.receiver {
-            loop {
+            while self.buffer.len() < self.buffer_limit {
                 match receiver.try_recv() {
-                    Ok(frame) => self.latest = Some(frame),
+                    Ok(frame) => self.buffer.push_back(frame),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        self.receiver = None;
+                        disconnected = true;
                         break;
                     }
                 }
             }
+        }
+        if disconnected {
+            self.receiver = None;
+        }
+
+        if self.buffering {
+            if self.buffer.len() < self.buffer_target {
+                return;
+            }
+            self.buffering = false;
+            self.next_frame_at = None;
+        }
+
+        let now = Instant::now();
+        let frames_due = match self.next_frame_at {
+            None => 1,
+            Some(deadline) if now >= deadline => {
+                1 + (now.duration_since(deadline).as_nanos() / self.frame_interval.as_nanos())
+                    as usize
+            }
+            Some(_) => 0,
+        };
+        if frames_due == 0 {
+            return;
+        }
+        let mut frames_to_take = 0;
+        while self
+            .buffer
+            .front()
+            .is_some_and(|frame| frame.presentation_time <= position)
+        {
+            self.latest = self.buffer.pop_front();
+            frames_to_take += 1;
+        }
+        if self.buffer.is_empty() && frames_to_take == 0 {
+            self.buffering = true;
+            self.next_frame_at = None;
+        } else {
+            self.next_frame_at = Some(match self.next_frame_at {
+                Some(deadline) => {
+                    deadline + self.frame_interval * u32::try_from(frames_due).unwrap_or(u32::MAX)
+                }
+                None => now + self.frame_interval,
+            });
         }
     }
 
@@ -87,36 +146,42 @@ impl VideoScreensaver {
     }
 
     fn start(&mut self, source: String, position: Duration, width: u16, height: u16, fps: u16) {
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let buffer_target = fps as usize;
+        let buffer_limit = buffer_target.saturating_mul(3);
+        let (sender, receiver) = mpsc::sync_channel(buffer_limit);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker_source = source.clone();
         thread::spawn(move || {
             let resolution_started = Instant::now();
-            let resolved = Command::new("yt-dlp")
-                .args([
-                    "--no-playlist",
-                    "-g",
-                    "-f",
-                    "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
-                    &worker_source,
-                ])
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output();
-            if worker_stop.load(Ordering::Relaxed) {
-                return;
-            }
-            let Ok(output) = resolved else { return };
-            if !output.status.success() {
-                return;
-            }
-            let direct_url = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let direct_url = if std::path::Path::new(&worker_source).is_file() {
+                worker_source.clone()
+            } else {
+                let resolved = Command::new("yt-dlp")
+                    .args([
+                        "--no-playlist",
+                        "-g",
+                        "-f",
+                        "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
+                        &worker_source,
+                    ])
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output();
+                if worker_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let Ok(output) = resolved else { return };
+                if !output.status.success() {
+                    return;
+                }
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            };
             if direct_url.is_empty() {
                 return;
             }
@@ -131,8 +196,6 @@ impl VideoScreensaver {
                 .args([
                     "-loglevel",
                     "error",
-                    "-readrate",
-                    "1",
                     "-ss",
                     &format!("{:.3}", synchronized_position.as_secs_f64()),
                     "-i",
@@ -158,16 +221,25 @@ impl VideoScreensaver {
                 return;
             };
             let frame_size = width as usize * height as usize * 3;
+            let mut frame_index = 0u64;
             while !worker_stop.load(Ordering::Relaxed) {
                 let mut pixels = vec![0; frame_size];
                 if stdout.read_exact(&mut pixels).is_err() {
                     break;
                 }
-                let _ = sender.try_send(VideoFrame {
-                    width,
-                    height,
-                    pixels,
-                });
+                if sender
+                    .send(VideoFrame {
+                        width,
+                        height,
+                        pixels,
+                        presentation_time: synchronized_position
+                            + Duration::from_secs_f64(frame_index as f64 / f64::from(fps)),
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                frame_index = frame_index.saturating_add(1);
             }
             let _ = child.kill();
             let _ = child.wait();
@@ -175,6 +247,11 @@ impl VideoScreensaver {
         self.receiver = Some(receiver);
         self.stop = Some(stop);
         self.key = Some((source, width, height, fps));
+        self.buffer_target = buffer_target;
+        self.buffer_limit = buffer_limit;
+        self.buffering = true;
+        self.frame_interval = Duration::from_secs_f64(1.0 / f64::from(fps));
+        self.next_frame_at = None;
     }
 
     fn stop(&mut self) {
@@ -188,6 +265,9 @@ impl VideoScreensaver {
         }
         self.receiver = None;
         self.key = None;
+        self.buffer.clear();
+        self.buffering = true;
+        self.next_frame_at = None;
     }
 }
 

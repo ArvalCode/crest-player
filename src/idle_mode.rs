@@ -90,6 +90,10 @@ impl IdleMode {
     pub fn is_visible(&self) -> bool {
         self.stage != IdleStage::Active
     }
+
+    pub fn should_preload_video(&self, playback_active: bool) -> bool {
+        playback_active && self.last_activity.elapsed() >= Duration::from_secs(4)
+    }
 }
 
 /// Render a clock-driven true-color half-block scene. Each terminal cell contains

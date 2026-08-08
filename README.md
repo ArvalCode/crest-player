@@ -28,6 +28,11 @@ ASCII music-video display when left idle.
   - **Cinema** after 30 seconds.
 - Render video as fast color ASCII, detailed dithered ASCII, or ANSI true-color half-block pixels.
 - Decode and present video at a selectable steady 15, 30, or 60 FPS, synchronized to the audio clock.
+- Prebuffer decoded video frames in memory to absorb network/decode stalls, discard
+  late frames, and release the buffer immediately when the screensaver ends.
+- Skip missed presentation deadlines instead of issuing burst catch-up renders.
+- Download a temporary video-only cache in parallel with streamed audio, prewarm
+  decoded frames before the overlay appears, and delete cached media after use.
 - Disable the YouTube screensaver, select its rendering style, or change its FPS from Home.
 - Wake on keyboard input, mouse clicks, or scrolling. Mouse movement alone is ignored.
 - Fall back to a procedural terminal animation while video loads or is unavailable.

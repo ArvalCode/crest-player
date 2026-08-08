@@ -12,6 +12,7 @@ pub struct Player {
     elapsed_before_start: Duration,
     current_path: Option<String>,
     video_sources: HashMap<String, String>,
+    video_files: HashMap<String, String>,
 }
 
 impl Player {
@@ -26,6 +27,7 @@ impl Player {
             elapsed_before_start: Duration::default(),
             current_path: None,
             video_sources: HashMap::new(),
+            video_files: HashMap::new(),
         }
     }
 
@@ -43,6 +45,7 @@ impl Player {
             if last.contains("ytmusic_play_") && last.ends_with(".mp3") {
                 let _ = fs::remove_file(&last);
                 self.video_sources.remove(&last);
+                self.remove_video_file(&last);
             }
         }
         self.stop();
@@ -105,10 +108,50 @@ impl Player {
         Some(
             self.current_path
                 .as_ref()
-                .and_then(|path| self.video_sources.get(path))
+                .and_then(|path| self.video_files.get(path))
                 .cloned()
+                .or_else(|| {
+                    self.current_path
+                        .as_ref()
+                        .and_then(|path| self.video_sources.get(path))
+                        .cloned()
+                })
                 .unwrap_or_else(|| format!("ytsearch1:{title} official music video")),
         )
+    }
+
+    pub fn register_video_file(&mut self, audio_path: &str, video_path: String) {
+        let relevant = self.current_path.as_deref() == Some(audio_path)
+            || self.last_temp_file.as_deref() == Some(audio_path)
+            || self.queue.iter().any(|(_, path)| path == audio_path);
+        if relevant {
+            if let Some(old) = self.video_files.insert(audio_path.to_string(), video_path) {
+                let _ = std::fs::remove_file(old);
+            }
+        } else {
+            let _ = std::fs::remove_file(video_path);
+        }
+    }
+
+    fn remove_video_file(&mut self, audio_path: &str) {
+        if let Some(path) = self.video_files.remove(audio_path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    pub fn cleanup_temp_media(&mut self) {
+        if let Some(audio_path) = self.last_temp_file.take() {
+            let _ = std::fs::remove_file(&audio_path);
+            self.remove_video_file(&audio_path);
+            self.video_sources.remove(&audio_path);
+        }
+        for (_, path) in self.queue.clone() {
+            if path.contains("ytmusic_play_") {
+                let _ = std::fs::remove_file(&path);
+                self.remove_video_file(&path);
+                self.video_sources.remove(&path);
+            }
+        }
     }
 
     pub fn current_video_id(&self) -> Option<String> {
@@ -188,6 +231,7 @@ impl Player {
                     {
                         let _ = fs::remove_file(&last);
                         self.video_sources.remove(&last);
+                        self.remove_video_file(&last);
                     }
                     // Play next in queue if available (FIFO order)
                     if !self.queue.is_empty() {
@@ -197,7 +241,8 @@ impl Player {
                     }
                     false
                 }
-                Ok(None) => true,
+                // The process is still running, but playback state did not change.
+                Ok(None) => false,
                 Err(_) => false,
             }
         } else {

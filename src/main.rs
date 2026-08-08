@@ -34,9 +34,17 @@ struct DownloadFinished {
     success: bool,
 }
 
+struct VideoPrefetchFinished {
+    audio_path: String,
+    video_path: String,
+    success: bool,
+}
+
 fn queue_youtube_download(
     player: &mut Player,
     sender: &std::sync::mpsc::Sender<DownloadFinished>,
+    video_sender: &std::sync::mpsc::Sender<VideoPrefetchFinished>,
+    prefetch_video: bool,
     title: &str,
     video_id: &str,
 ) {
@@ -56,6 +64,40 @@ fn queue_youtube_download(
     player
         .queue
         .push((format!("{title} (Downloading...)"), path_string.clone()));
+
+    if prefetch_video {
+        let video_path = std::env::temp_dir()
+            .join(format!("ytmusic_video_{unique}.cache"))
+            .to_string_lossy()
+            .into_owned();
+        let video_audio_path = path_string.clone();
+        let video_url = url.clone();
+        let video_sender = video_sender.clone();
+        std::thread::spawn(move || {
+            let success = Command::new("yt-dlp")
+                .args([
+                    "--no-playlist",
+                    "-f",
+                    "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
+                    "-o",
+                    &video_path,
+                    &video_url,
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if let Err(error) = video_sender.send(VideoPrefetchFinished {
+                audio_path: video_audio_path,
+                video_path,
+                success,
+            }) {
+                let _ = std::fs::remove_file(error.0.video_path);
+            }
+        });
+    }
 
     let sender = sender.clone();
     let title = title.to_string();
@@ -88,11 +130,20 @@ fn queue_youtube_download(
 
 fn process_download_completions(
     receiver: &std::sync::mpsc::Receiver<DownloadFinished>,
+    video_receiver: &std::sync::mpsc::Receiver<VideoPrefetchFinished>,
     player: &mut Player,
     app: &mut App,
     video_screensaver: &mut VideoScreensaver,
 ) -> bool {
     let mut changed = false;
+    while let Ok(video) = video_receiver.try_recv() {
+        if video.success {
+            player.register_video_file(&video.audio_path, video.video_path);
+            video_screensaver.restart();
+        } else {
+            let _ = std::fs::remove_file(video.video_path);
+        }
+    }
     while let Ok(download) = receiver.try_recv() {
         if let Some(index) = player.queue.iter().position(|(_, path)| path == &download.path) {
             if download.success
@@ -128,6 +179,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut video_screensaver = VideoScreensaver::new();
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadFinished>();
+    let (video_prefetch_tx, video_prefetch_rx) =
+        std::sync::mpsc::channel::<VideoPrefetchFinished>();
     let (recommendation_tx, recommendation_rx) =
         std::sync::mpsc::channel::<(String, Result<Recommendation, String>)>();
     let mut autoplay_requested_for: Option<String>;
@@ -147,6 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         video_screensaver.restart();
         process_download_completions(
             &download_rx,
+            &video_prefetch_rx,
             &mut player,
             &mut app,
             &mut video_screensaver,
@@ -271,8 +325,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             needs_redraw = true;
         }
         let screen = terminal.size()?;
+        let video_preloading = idle_mode.should_preload_video(player.status == "Playing");
         video_screensaver.update(
-            idle_mode.is_visible(),
+            idle_mode.is_visible() || video_preloading,
             player.video_source(),
             player.position(),
             screen.width,
@@ -549,7 +604,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             } else if !app.results.is_empty() {
                     let (title, id) = &app.results[app.selected];
-                    queue_youtube_download(&mut player, &download_tx, title, id);
+                    queue_youtube_download(
+                        &mut player,
+                        &download_tx,
+                        &video_prefetch_tx,
+                        app.idle_video_enabled,
+                        title,
+                        id,
+                    );
                     needs_redraw = true;
                             }
                         }
@@ -594,7 +656,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         } else if !app.results.is_empty() {
                             let (title, id) = &app.results[app.selected];
-                            queue_youtube_download(&mut player, &download_tx, title, id);
+                            queue_youtube_download(
+                                &mut player,
+                                &download_tx,
+                                &video_prefetch_tx,
+                                app.idle_video_enabled,
+                                title,
+                                id,
+                            );
                             needs_redraw = true;
                         }
                     },
@@ -658,6 +727,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Only check playback status and redraw if something changed or on tick
         if process_download_completions(
             &download_rx,
+            &video_prefetch_rx,
             &mut player,
             &mut app,
             &mut video_screensaver,
@@ -673,6 +743,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 queue_youtube_download(
                     &mut player,
                     &download_tx,
+                    &video_prefetch_tx,
+                    app.idle_video_enabled,
                     &recommendation.title,
                     &recommendation.video_id,
                 );
@@ -788,7 +860,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
+            // Skip every elapsed interval in one step. Advancing only one interval
+            // makes a slow render trigger a burst of immediate catch-up frames.
+            let elapsed_intervals = (last_tick.elapsed().as_nanos()
+                / tick_rate.as_nanos())
+                .max(1)
+                .min(u32::MAX as u128) as u32;
+            last_tick += tick_rate * elapsed_intervals;
             if idle_mode.is_visible() {
                 needs_redraw = true;
             }
@@ -797,6 +875,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 // Save and load library to a file in the Music directory
     player.stop();
+    player.cleanup_temp_media();
     player.queue.clear();
     disable_raw_mode()?;
     execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
