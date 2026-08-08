@@ -7,9 +7,18 @@ ASCII music-video display when left idle.
 ## Features
 
 - Search YouTube and queue tracks without blocking the terminal interface.
+- Share one continuous playback queue between streaming and downloaded-only modes.
+- Keep audio and queue advancement running on Home without showing the video overlay.
+- Keep all configuration on a dedicated Settings page and persist changes between
+  launches in the platform user configuration directory.
+  On Linux this is normally `~/.config/crest-player/settings.json`.
 - Stream audio through `yt-dlp` and `ffplay` or play a downloaded-only library.
 - Download and save favorite tracks locally.
 - Display synchronized lyrics with optional Japanese romaji.
+- Show available Latin-letter pronunciation lines alongside original lyrics with
+  the default-on **English Pronunciations** Home setting.
+- Overlay the current synchronized lyric and a preview of the next line throughout
+  Idle, Ambient, and Cinema without resizing the video area.
 - Seek, pause, resume, and skip queued tracks.
 - Enter a staged YouTube music-video screensaver while music is playing:
   - **Idle** after 5 seconds.

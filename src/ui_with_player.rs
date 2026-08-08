@@ -165,7 +165,7 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
                 if active { format!("▶ {}", line.text) } else { format!("  {}", line.text) },
                 lyric_style,
             )];
-            if let Some(romaji) = &line.romaji {
+            if app.pronunciations_enabled && let Some(romaji) = &line.romaji {
                 rows.push(ratatui::text::Line::styled(
                     format!("  {}", romaji),
                     Style::default().fg(if active { Color::LightYellow } else { Color::DarkGray }),
@@ -178,7 +178,7 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     let lyrics = Paragraph::new(lyric_lines)
         .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((app.lyrics_scroll, 0))
-        .block(Block::default().borders(Borders::ALL).title(format!("Lyrics + Romaji · {} · PgUp/PgDn", sync_label)));
+        .block(Block::default().borders(Borders::ALL).title(format!("Lyrics{} · {} · PgUp/PgDn", if app.pronunciations_enabled { " + Pronunciation" } else { "" }, sync_label)));
     f.render_widget(lyrics, main_chunks[2]);
     }
 }

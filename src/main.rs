@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
-use app::{App, save_library};
+use app::{App, save_library, save_settings};
 use player::Player;
 use lyrics::{Lyrics, fetch_lyrics};
 use ui_with_player::ui_with_player;
@@ -86,6 +86,34 @@ fn queue_youtube_download(
     });
 }
 
+fn process_download_completions(
+    receiver: &std::sync::mpsc::Receiver<DownloadFinished>,
+    player: &mut Player,
+    app: &mut App,
+    video_screensaver: &mut VideoScreensaver,
+) -> bool {
+    let mut changed = false;
+    while let Ok(download) = receiver.try_recv() {
+        if let Some(index) = player.queue.iter().position(|(_, path)| path == &download.path) {
+            if download.success
+                && (download.autoplay || player.status == "Downloading...")
+                && player.child.is_none()
+            {
+                player.queue.remove(index);
+                player.play(&download.path, &download.title);
+                video_screensaver.restart();
+            } else if download.success {
+                player.queue[index].0 = download.title;
+            } else {
+                player.queue.remove(index);
+                app.error = Some(format!("Failed to download {}", download.title));
+            }
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -107,36 +135,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lyrics_requested_at: Option<Instant> = None;
 
     let mut startup_selected = 0; // 0 = stream+downloaded, 1 = downloaded only
+    let mut settings_selected = 0;
 
     'home: loop {
     // --- Startup screen state ---
     let mut show_startup = true;
+    let mut settings_page = false;
     while show_startup {
+        // Home remains an audio-capable view, but never starts the video overlay.
+        idle_mode.note_activity();
+        video_screensaver.restart();
+        process_download_completions(
+            &download_rx,
+            &mut player,
+            &mut app,
+            &mut video_screensaver,
+        );
+        player.is_playing();
         terminal.draw(|f| draw_startup_screen(
             f,
-            startup_selected,
-            app.lyrics_enabled,
-            app.live_sync_enabled,
+            (
+                settings_page,
+                if settings_page { settings_selected } else { startup_selected },
+            ),
+            (
+                app.lyrics_enabled,
+                app.live_sync_enabled,
+                app.pronunciations_enabled,
+            ),
             (
                 app.idle_video_enabled,
                 app.idle_video_render_mode,
                 app.idle_video_fps,
             ),
             app.autoplay_enabled,
+            (player.title.as_deref(), player.status.as_str()),
         ))?;
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Up => {
-                        startup_selected = startup_selected.checked_sub(1).unwrap_or(7);
+                        if settings_page {
+                            settings_selected = settings_selected.checked_sub(1).unwrap_or(6);
+                        } else {
+                            startup_selected = startup_selected.checked_sub(1).unwrap_or(2);
+                        }
                     }
                     KeyCode::Down => {
-                        startup_selected = (startup_selected + 1) % 8;
+                        if settings_page {
+                            settings_selected = (settings_selected + 1) % 7;
+                        } else {
+                            startup_selected = (startup_selected + 1) % 3;
+                        }
                     }
                     KeyCode::Enter => {
-                        match startup_selected {
-                            0 | 1 => show_startup = false,
-                            2 => {
+                        if !settings_page {
+                            match startup_selected {
+                                0 | 1 => show_startup = false,
+                                2 => settings_page = true,
+                                _ => {}
+                            }
+                        } else {
+                            match settings_selected {
+                            0 => {
                                 app.lyrics_enabled = !app.lyrics_enabled;
                                 if !app.lyrics_enabled {
                                     app.lyrics.clear();
@@ -145,30 +206,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     lyrics_requested_at = None;
                                 }
                             }
-                            3 if app.lyrics_enabled => {
+                            1 if app.lyrics_enabled => {
                                 app.live_sync_enabled = !app.live_sync_enabled;
                                 app.lyrics_active = None;
                                 app.lyrics_scroll = 0;
                             }
-                            4 => {
+                            2 => {
+                                app.pronunciations_enabled = !app.pronunciations_enabled;
+                            }
+                            3 => {
                                 app.idle_video_enabled = !app.idle_video_enabled;
                                 idle_mode.note_activity();
                             }
-                            5 => {
+                            4 => {
                                 app.idle_video_render_mode = app.idle_video_render_mode.next();
                             }
-                            6 => {
+                            5 => {
                                 app.idle_video_fps = match app.idle_video_fps {
                                     15 => 30,
                                     30 => 60,
                                     _ => 15,
                                 };
                             }
-                            7 => {
+                            6 => {
                                 app.autoplay_enabled = !app.autoplay_enabled;
                             }
                             _ => {}
+                            }
+                            save_settings(&app);
                         }
+                    }
+                    KeyCode::Esc | KeyCode::Home if settings_page => {
+                        settings_page = false;
                     }
                     KeyCode::Char('q') => {
                         break 'home;
@@ -223,6 +292,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     player.position(),
                     video_screensaver.frame(),
                     app.idle_video_render_mode,
+                    if app.lyrics_enabled
+                        && app.live_sync_enabled
+                        && app.lyrics_synced
+                        && !app.lyrics.is_empty()
+                    {
+                        Some({
+                            let index = app.lyrics_active.unwrap_or(0);
+                            let display_line = |line: &crate::lyrics::LyricLine| {
+                                if app.pronunciations_enabled
+                                    && let Some(pronunciation) = &line.romaji
+                                {
+                                    format!("{}  ·  {}", line.text, pronunciation)
+                                } else {
+                                    line.text.clone()
+                                }
+                            };
+                            (
+                                display_line(&app.lyrics[index]),
+                                app.lyrics.get(index + 1).map(display_line),
+                            )
+                        })
+                    } else {
+                        None
+                    },
                 ))?;
             } else if downloaded_only_mode {
                 terminal.draw(|f| ui_downloaded_only::ui_downloaded_only(f, &app, &player))?;
@@ -311,13 +404,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Only allow navigation and playback in the downloaded songs list (results panel)
                     match (key.code, key.modifiers) {
                         (KeyCode::Home, m) if m.is_empty() => {
-                            player.stop();
-                            player.queue.clear();
-                            app.lyrics.clear();
-                            app.lyrics_message = "Play a song to load lyrics.".to_string();
-                            app.lyrics_active = None;
-                            lyrics_requested_for = None;
-                            lyrics_requested_at = None;
+                            idle_mode.note_activity();
+                            video_screensaver.restart();
                             continue 'home;
                         },
                         (KeyCode::PageDown, m) if m.is_empty() => {
@@ -395,13 +483,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 match (key.code, key.modifiers) {
                     (KeyCode::Home, m) if m.is_empty() => {
-                        player.stop();
-                        player.queue.clear();
-                        app.lyrics.clear();
-                        app.lyrics_message = "Play a song to load lyrics.".to_string();
-                        app.lyrics_active = None;
-                        lyrics_requested_for = None;
-                        lyrics_requested_at = None;
+                        idle_mode.note_activity();
+                        video_screensaver.restart();
                         continue 'home;
                     },
                     (KeyCode::PageDown, m) if m.is_empty() => {
@@ -573,23 +656,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         // Only check playback status and redraw if something changed or on tick
-        while let Ok(download) = download_rx.try_recv() {
-            if let Some(index) = player.queue.iter().position(|(_, path)| path == &download.path) {
-                if download.success
-                    && (download.autoplay || player.status == "Downloading...")
-                    && player.child.is_none()
-                {
-                    player.queue.remove(index);
-                    player.play(&download.path, &download.title);
-                    video_screensaver.restart();
-                } else if download.success {
-                    player.queue[index].0 = download.title;
-                } else {
-                    player.queue.remove(index);
-                    app.error = Some(format!("Failed to download {}", download.title));
-                }
-                needs_redraw = true;
-            }
+        if process_download_completions(
+            &download_rx,
+            &mut player,
+            &mut app,
+            &mut video_screensaver,
+        ) {
+            needs_redraw = true;
         }
         while let Ok((seed_title, result)) = recommendation_rx.try_recv() {
             if app.autoplay_enabled
@@ -698,7 +771,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(index) = active {
                     let display_row: usize = app.lyrics[..index]
                         .iter()
-                        .map(|line| 1 + usize::from(line.romaji.is_some()))
+                        .map(|line| {
+                            1 + usize::from(
+                                app.pronunciations_enabled && line.romaji.is_some(),
+                            )
+                        })
                         .sum();
                     app.lyrics_scroll = display_row.saturating_sub(2).min(u16::MAX as usize) as u16;
                 }
@@ -714,6 +791,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     }
 // Save and load library to a file in the Music directory
+    player.stop();
+    player.queue.clear();
     disable_raw_mode()?;
     execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
 

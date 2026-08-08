@@ -102,7 +102,9 @@ pub fn draw_idle_mode(
     position: Duration,
     video_frame: Option<&VideoFrame>,
     render_mode: VideoRenderMode,
+    synced_lyrics: Option<(String, Option<String>)>,
 ) {
+    let has_synced_lyrics = synced_lyrics.is_some();
     let area = frame.size();
     frame.render_widget(
         Block::default().style(Style::default().bg(Color::Black)),
@@ -158,9 +160,56 @@ pub fn draw_idle_mode(
     }
     frame.render_widget(Paragraph::new(lines), inner);
 
+    // Lyrics are overlaid instead of taking layout space, preserving the video's
+    // terminal-cell resolution and aspect ratio.
+    if stage != IdleStage::Active
+        && inner.height >= 3
+        && let Some((current, next)) = synced_lyrics
+    {
+        let current_line = format!("♪ {current}");
+        let next_line = next.map(|line| format!("  {line}"));
+        let content_width = current_line
+            .chars()
+            .count()
+            .max(
+                next_line
+                    .as_deref()
+                    .map(|line| line.chars().count())
+                    .unwrap_or(0),
+            )
+            .saturating_add(4)
+            .min(inner.width as usize) as u16;
+        let height = if next_line.is_some() { 2 } else { 1 };
+        let lyrics_area = Rect::new(
+            inner.x + inner.width.saturating_sub(content_width) / 2,
+            inner.bottom().saturating_sub(height + 2),
+            content_width,
+            height,
+        );
+        let mut lyric_lines = vec![Line::styled(
+            current_line,
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Black)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )];
+        if let Some(next_line) = next_line {
+            lyric_lines.push(Line::styled(
+                next_line,
+                Style::default().fg(Color::Gray).bg(Color::Black),
+            ));
+        }
+        frame.render_widget(
+            Paragraph::new(lyric_lines)
+                .alignment(Alignment::Center)
+                .style(Style::default().bg(Color::Black)),
+            lyrics_area,
+        );
+    }
+
     // Keep metadata during the first two stages; cinema intentionally leaves only
     // a small clock so the scene can occupy the terminal.
-    if stage != IdleStage::Cinema && inner.height >= 5 {
+    if !has_synced_lyrics && stage != IdleStage::Cinema && inner.height >= 5 {
         let label = format!(
             "  {}  ·  {}:{:02}  ",
             title.unwrap_or("Unknown track"),
@@ -180,7 +229,7 @@ pub fn draw_idle_mode(
                 .style(Style::default().fg(Color::White).bg(Color::Black)),
             overlay,
         );
-    } else if inner.width >= 8 && inner.height > 0 {
+    } else if !has_synced_lyrics && inner.width >= 8 && inner.height > 0 {
         let clock = format!("{}:{:02}", position.as_secs() / 60, position.as_secs() % 60);
         let clock_area = Rect::new(
             inner.right().saturating_sub(7),
