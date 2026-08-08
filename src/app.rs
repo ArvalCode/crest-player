@@ -1,4 +1,5 @@
 use dirs::audio_dir;
+use crate::lyrics::LyricLine;
 
 pub struct App {
     pub input: String,
@@ -9,6 +10,13 @@ pub struct App {
     pub queue: Vec<(String, String)>,
     pub library: Vec<(String, String)>,
     pub show_library: bool,
+    pub lyrics: Vec<LyricLine>,
+    pub lyrics_message: String,
+    pub lyrics_synced: bool,
+    pub lyrics_active: Option<usize>,
+    pub lyrics_scroll: u16,
+    pub lyrics_enabled: bool,
+    pub live_sync_enabled: bool,
 }
 
 impl App {
@@ -22,6 +30,13 @@ impl App {
             queue: Vec::new(),
             library: load_library(),
             show_library: false,
+            lyrics: Vec::new(),
+            lyrics_message: "Play a song to load lyrics.".to_string(),
+            lyrics_synced: false,
+            lyrics_active: None,
+            lyrics_scroll: 0,
+            lyrics_enabled: true,
+            live_sync_enabled: true,
         }
     }
 }

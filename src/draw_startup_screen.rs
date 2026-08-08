@@ -4,7 +4,12 @@ use ratatui::text::{Span, Line};
 use ratatui::style::{Style, Color};
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
-pub fn draw_startup_screen(f: &mut ratatui::Frame, selected: usize) {
+pub fn draw_startup_screen(
+    f: &mut ratatui::Frame,
+    selected: usize,
+    lyrics_enabled: bool,
+    live_sync_enabled: bool,
+) {
     // Flamingo C ASCII art (red)
     let flamingo = vec![
     r"                                            *******,           /#,",
@@ -45,6 +50,18 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, selected: usize) {
     let options = vec![
         ("Stream + Downloaded Music", "Browse and stream from YouTube, plus play your downloaded music."),
         ("Downloaded Music Only", "Play only your downloaded music library."),
+        (
+            if lyrics_enabled { "Lyrics: ON" } else { "Lyrics: OFF" },
+            "Show or completely remove the Lyrics + Romaji panel.",
+        ),
+        (
+            if live_sync_enabled { "Live Lyrics Sync: ON" } else { "Live Lyrics Sync: OFF" },
+            if lyrics_enabled {
+                "Automatically highlight and scroll timestamped lyrics during playback."
+            } else {
+                "Enable Lyrics first to use live synchronization."
+            },
+        ),
     ];
 
     let mut option_lines = vec![];
@@ -80,6 +97,6 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, selected: usize) {
     let options_paragraph = Paragraph::new(option_lines).alignment(Alignment::Center);
     f.render_widget(options_paragraph, layout[3]);
 
-    let hint = Paragraph::new("↑/↓ to select, Enter to start, Ctrl+Q to quit").alignment(Alignment::Center);
+    let hint = Paragraph::new("↑/↓ to select, Enter to start/toggle, Q to quit").alignment(Alignment::Center);
     f.render_widget(hint, layout[4]);
 }

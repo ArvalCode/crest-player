@@ -3,13 +3,15 @@ use crate::{App, Player};
 
 pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     let size = f.size();
+    let column_widths = if app.lyrics_enabled {
+        vec![Constraint::Percentage(40), Constraint::Percentage(20), Constraint::Percentage(40)]
+    } else {
+        vec![Constraint::Percentage(70), Constraint::Percentage(30)]
+    };
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .margin(2)
-        .constraints([
-            Constraint::Min(60),
-            Constraint::Length(40),
-        ])
+        .constraints(column_widths)
         .split(size);
 
     let vchunks = Layout::default()
@@ -76,9 +78,9 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
 
     // Player bar
     let player_text = if let Some(title) = &player.title {
-        format!("▶ {} [{}] (Ctrl+p pause/resume, Ctrl+n next, Backspace home, Ctrl+q quit)", title, player.status)
+        format!("▶ {} [{}] (Ctrl+± seek 5s, Ctrl+p pause, Ctrl+n next, Backspace home)", title, player.status)
     } else {
-        format!("▶ [No song playing] [{}] (Ctrl+p pause/resume, Ctrl+n next, Backspace home, Ctrl+q quit)", player.status)
+        format!("▶ [No song playing] [{}] (Ctrl+± seek 5s, Ctrl+p pause, Ctrl+n next, Backspace home)", player.status)
     };
     let player_bar = Paragraph::new(player_text).block(Block::default().borders(Borders::ALL).title("Player"));
     f.render_widget(player_bar, vchunks[3]);
@@ -106,4 +108,36 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
         .block(Block::default().borders(Borders::ALL).title(right_title))
         .highlight_style(Style::default().bg(Color::Green).fg(Color::Black));
     f.render_widget(right_list, main_chunks[1]);
+
+    if app.lyrics_enabled {
+    let lyric_lines: Vec<ratatui::text::Line> = if app.lyrics.is_empty() {
+        vec![ratatui::text::Line::from(app.lyrics_message.as_str())]
+    } else {
+        app.lyrics.iter().enumerate().flat_map(|(index, line)| {
+            let active = app.lyrics_active == Some(index);
+            let lyric_style = if active {
+                Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let mut rows = vec![ratatui::text::Line::styled(
+                if active { format!("▶ {}", line.text) } else { format!("  {}", line.text) },
+                lyric_style,
+            )];
+            if let Some(romaji) = &line.romaji {
+                rows.push(ratatui::text::Line::styled(
+                    format!("  {}", romaji),
+                    Style::default().fg(if active { Color::LightYellow } else { Color::DarkGray }),
+                ));
+            }
+            rows
+        }).collect()
+    };
+    let sync_label = if app.lyrics_synced && app.live_sync_enabled { "SYNCED" } else { "STATIC" };
+    let lyrics = Paragraph::new(lyric_lines)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .scroll((app.lyrics_scroll, 0))
+        .block(Block::default().borders(Borders::ALL).title(format!("Lyrics + Romaji · {} · PgUp/PgDn", sync_label)));
+    f.render_widget(lyrics, main_chunks[2]);
+    }
 }

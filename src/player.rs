@@ -1,4 +1,5 @@
 use std::process::{Child, Stdio, Command};
+use std::time::{Duration, Instant};
 
 pub struct Player {
     pub child: Option<Child>,
@@ -6,6 +7,9 @@ pub struct Player {
     pub status: String,
     pub queue: Vec<(String, String)>,
     pub last_temp_file: Option<String>, // Track last temp file for deletion
+    playback_started: Option<Instant>,
+    elapsed_before_start: Duration,
+    current_path: Option<String>,
 }
 
 impl Player {
@@ -16,6 +20,9 @@ impl Player {
             status: "Stopped".to_string(),
             queue: Vec::new(),
             last_temp_file: None,
+            playback_started: None,
+            elapsed_before_start: Duration::default(),
+            current_path: None,
         }
     }
 
@@ -82,8 +89,11 @@ impl Player {
             .spawn()
             .ok();
         self.child = child;
+        self.current_path = Some(play_path);
         self.title = Some(title.to_string());
         self.status = "Playing".to_string();
+        self.elapsed_before_start = Duration::default();
+        self.playback_started = Some(Instant::now());
     }
 
     /// Try to find a library file by title (for fallback if temp file is missing)
@@ -108,6 +118,9 @@ impl Player {
                 .arg(child.id().to_string())
                 .status();
             self.status = "Paused".to_string();
+            if let Some(started) = self.playback_started.take() {
+                self.elapsed_before_start += started.elapsed();
+            }
         }
     }
     pub fn resume(&mut self) {
@@ -117,6 +130,7 @@ impl Player {
                 .arg(child.id().to_string())
                 .status();
             self.status = "Playing".to_string();
+            self.playback_started = Some(Instant::now());
         }
     }
     pub fn stop(&mut self) {
@@ -126,6 +140,9 @@ impl Player {
         self.child = None;
         self.status = "Stopped".to_string();
         self.title = None;
+        self.current_path = None;
+        self.playback_started = None;
+        self.elapsed_before_start = Duration::default();
         // Do not clear the queue here; only clear on quit
     }
     pub fn is_playing(&mut self) -> bool {
@@ -136,6 +153,9 @@ impl Player {
                     self.child = None;
                     self.status = "Stopped".to_string();
                     self.title = None;
+                    self.current_path = None;
+                    self.playback_started = None;
+                    self.elapsed_before_start = Duration::default();
                     // After playback, delete temp streaming file if needed
                     if let Some(last) = self.last_temp_file.take() {
                         if last.contains("ytmusic_play_") && last.ends_with(".mp3") {
@@ -155,6 +175,48 @@ impl Player {
             }
         } else {
             false
+        }
+    }
+
+    pub fn position(&self) -> Duration {
+        self.elapsed_before_start
+            + self.playback_started.map(|started| started.elapsed()).unwrap_or_default()
+    }
+
+    pub fn seek_by(&mut self, seconds: i64) {
+        let Some(path) = self.current_path.clone() else { return };
+        let Some(title) = self.title.clone() else { return };
+        let was_paused = self.status == "Paused";
+        let current = self.position().as_secs_f64();
+        let target = (current + seconds as f64).max(0.0);
+
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let child = Command::new("ffplay")
+            .args(["-ss", &format!("{target:.3}"), "-nodisp", "-autoexit", &path])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok();
+        self.child = child;
+        self.current_path = Some(path);
+        self.title = Some(title);
+        self.elapsed_before_start = Duration::from_secs_f64(target);
+        if was_paused {
+            if let Some(child) = &self.child {
+                let _ = Command::new("kill")
+                    .arg("-STOP")
+                    .arg(child.id().to_string())
+                    .status();
+            }
+            self.playback_started = None;
+            self.status = "Paused".to_string();
+        } else {
+            self.playback_started = Some(Instant::now());
+            self.status = "Playing".to_string();
         }
     }
 }

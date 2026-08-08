@@ -4,6 +4,7 @@ mod player;
 mod ui_with_player;
 mod ui_downloaded_only;
 mod draw_startup_screen;
+mod lyrics;
 mod search;
 
 
@@ -15,6 +16,7 @@ use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 use app::{App, save_library};
 use player::Player;
+use lyrics::{Lyrics, fetch_lyrics};
 use ui_with_player::ui_with_player;
 use ui_downloaded_only::ui_downloaded_only;
 use draw_startup_screen::draw_startup_screen;
@@ -31,6 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(400);
     let mut needs_redraw = true;
+    let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
+    let mut lyrics_requested_for: Option<String> = None;
+    let mut lyrics_requested_at: Option<Instant> = None;
 
     let mut startup_selected = 0; // 0 = stream+downloaded, 1 = downloaded only
 
@@ -38,15 +43,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Startup screen state ---
     let mut show_startup = true;
     while show_startup {
-        terminal.draw(|f| draw_startup_screen(f, startup_selected))?;
+        terminal.draw(|f| draw_startup_screen(
+            f,
+            startup_selected,
+            app.lyrics_enabled,
+            app.live_sync_enabled,
+        ))?;
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Up | KeyCode::Down => {
-                        startup_selected = 1 - startup_selected;
+                    KeyCode::Up => {
+                        startup_selected = startup_selected.checked_sub(1).unwrap_or(3);
+                    }
+                    KeyCode::Down => {
+                        startup_selected = (startup_selected + 1) % 4;
                     }
                     KeyCode::Enter => {
-                        show_startup = false;
+                        match startup_selected {
+                            0 | 1 => show_startup = false,
+                            2 => {
+                                app.lyrics_enabled = !app.lyrics_enabled;
+                                if !app.lyrics_enabled {
+                                    app.lyrics.clear();
+                                    app.lyrics_active = None;
+                                    lyrics_requested_for = None;
+                                    lyrics_requested_at = None;
+                                }
+                            }
+                            3 if app.lyrics_enabled => {
+                                app.live_sync_enabled = !app.live_sync_enabled;
+                                app.lyrics_active = None;
+                                app.lyrics_scroll = 0;
+                            }
+                            _ => {}
+                        }
                     }
                     KeyCode::Char('q') => {
                         break 'home;
@@ -94,7 +124,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Backspace, m) if m.is_empty() => {
                             player.stop();
                             player.queue.clear();
+                            app.lyrics.clear();
+                            app.lyrics_message = "Play a song to load lyrics.".to_string();
+                            app.lyrics_active = None;
+                            lyrics_requested_for = None;
+                            lyrics_requested_at = None;
                             continue 'home;
+                        },
+                        (KeyCode::PageDown, m) if m.is_empty() => {
+                            app.lyrics_scroll = app.lyrics_scroll.saturating_add(5);
+                        },
+                        (KeyCode::PageUp, m) if m.is_empty() => {
+                            app.lyrics_scroll = app.lyrics_scroll.saturating_sub(5);
+                        },
+                        (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            player.seek_by(5);
+                        },
+                        (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            player.seek_by(-5);
                         },
                         (KeyCode::Down, m) if m.is_empty() => {
                             if !app.results.is_empty() {
@@ -127,12 +174,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         },
                         (KeyCode::Char('n'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                            if let Some(child) = &mut player.child {
-                                let _ = child.kill();
-                            }
-                            player.child = None;
-                            player.status = "Stopped".to_string();
-                            player.title = None;
+                            player.stop();
+                            app.lyrics_active = None;
                             if !player.queue.is_empty() {
                                 let (title, url) = player.queue.remove(0);
                                 player.play(&url, &title);
@@ -165,7 +208,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (KeyCode::Backspace, m) if m.is_empty() => {
                         player.stop();
                         player.queue.clear();
+                        app.lyrics.clear();
+                        app.lyrics_message = "Play a song to load lyrics.".to_string();
+                        app.lyrics_active = None;
+                        lyrics_requested_for = None;
+                        lyrics_requested_at = None;
                         continue 'home;
+                    },
+                    (KeyCode::PageDown, m) if m.is_empty() => {
+                        app.lyrics_scroll = app.lyrics_scroll.saturating_add(5);
+                    },
+                    (KeyCode::PageUp, m) if m.is_empty() => {
+                        app.lyrics_scroll = app.lyrics_scroll.saturating_sub(5);
+                    },
+                    (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        player.seek_by(5);
+                    },
+                    (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        player.seek_by(-5);
                     },
                     // Special case: if user types exactly :library, show library in results
                     (KeyCode::Char(c), m) if m.is_empty() => {
@@ -253,12 +313,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     (KeyCode::Char('n'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
                         // Ctrl+n: Skip to next song in queue
-                        if let Some(child) = &mut player.child {
-                            let _ = child.kill();
-                        }
-                        player.child = None;
-                        player.status = "Stopped".to_string();
-                        player.title = None;
+                        player.stop();
+                        app.lyrics_active = None;
                         // Play next in queue if available (FIFO order)
                         if !player.queue.is_empty() {
                             let (title, url) = player.queue.remove(0);
@@ -384,6 +440,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let playing_changed = player.is_playing();
         if playing_changed {
             needs_redraw = true;
+        }
+
+        if app.lyrics_enabled {
+        if let Some(title) = player.title.as_ref() {
+            let clean_title = title.trim_end_matches(" (Downloading...)").to_string();
+            if lyrics_requested_for.as_ref() != Some(&clean_title) {
+                lyrics_requested_for = Some(clean_title.clone());
+                lyrics_requested_at = Some(Instant::now());
+                app.lyrics.clear();
+                app.lyrics_message = "Loading synchronized lyrics...".to_string();
+                app.lyrics_synced = false;
+                app.lyrics_active = None;
+                app.lyrics_scroll = 0;
+                let tx = lyrics_tx.clone();
+                std::thread::spawn(move || {
+                    let result = std::panic::catch_unwind(|| fetch_lyrics(&clean_title))
+                        .unwrap_or_else(|_| Err("Lyrics processing failed unexpectedly.".to_string()));
+                    let _ = tx.send((clean_title, result));
+                });
+                needs_redraw = true;
+            }
+        } else {
+            lyrics_requested_for = None;
+            lyrics_requested_at = None;
+        }
+        }
+
+        while let Ok((title, result)) = lyrics_rx.try_recv() {
+            if lyrics_requested_for.as_ref() == Some(&title) {
+                lyrics_requested_at = None;
+                match result {
+                    Ok(lyrics) => {
+                        app.lyrics = lyrics.lines;
+                        app.lyrics_synced = lyrics.synced;
+                        app.lyrics_message = if lyrics.synced {
+                            "Synchronized lyrics".to_string()
+                        } else {
+                            "Plain lyrics (timing unavailable)".to_string()
+                        };
+                        app.lyrics_active = None;
+                    }
+                    Err(error) => {
+                        app.lyrics.clear();
+                        app.lyrics_synced = false;
+                        app.lyrics_message = error;
+                        app.lyrics_active = None;
+                    }
+                }
+                needs_redraw = true;
+            }
+        }
+        if lyrics_requested_at
+            .map(|started| started.elapsed() > Duration::from_secs(15))
+            .unwrap_or(false)
+        {
+            app.lyrics.clear();
+            app.lyrics_synced = false;
+            app.lyrics_active = None;
+            app.lyrics_message = "Lyrics loading timed out. Start the song again to retry.".to_string();
+            lyrics_requested_at = None;
+            needs_redraw = true;
+        }
+        if app.lyrics_enabled && app.live_sync_enabled && app.lyrics_synced {
+            let position = player.position();
+            let active = app.lyrics.iter().rposition(|line| {
+                line.timestamp.map(|timestamp| timestamp <= position).unwrap_or(false)
+            });
+            if active != app.lyrics_active {
+                app.lyrics_active = active;
+                if let Some(index) = active {
+                    let display_row: usize = app.lyrics[..index]
+                        .iter()
+                        .map(|line| 1 + usize::from(line.romaji.is_some()))
+                        .sum();
+                    app.lyrics_scroll = display_row.saturating_sub(2).min(u16::MAX as usize) as u16;
+                }
+                needs_redraw = true;
+            }
         }
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
