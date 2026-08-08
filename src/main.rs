@@ -32,10 +32,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_rate = Duration::from_millis(400);
     let mut needs_redraw = true;
 
-    // --- Startup screen state ---
-    let mut show_startup = true;
     let mut startup_selected = 0; // 0 = stream+downloaded, 1 = downloaded only
 
+    'home: loop {
+    // --- Startup screen state ---
+    let mut show_startup = true;
     while show_startup {
         terminal.draw(|f| draw_startup_screen(f, startup_selected))?;
         if event::poll(Duration::from_millis(50))? {
@@ -48,9 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         show_startup = false;
                     }
                     KeyCode::Char('q') => {
-                        disable_raw_mode()?;
-                        execute!(io::stdout(), LeaveAlternateScreen)?;
-                        return Ok(());
+                        break 'home;
                     }
                     _ => {}
                 }
@@ -65,6 +64,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.results = app.library.clone();
         app.input.clear();
         app.show_library = false; // results panel is now the library
+        app.selected = 0;
+    } else {
+        app.results.clear();
+        app.input.clear();
+        app.show_library = false;
+        app.selected = 0;
     }
 
     loop {
@@ -86,6 +91,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if downloaded_only_mode {
                     // Only allow navigation and playback in the downloaded songs list (results panel)
                     match (key.code, key.modifiers) {
+                        (KeyCode::Backspace, m) if m.is_empty() => {
+                            player.stop();
+                            player.queue.clear();
+                            continue 'home;
+                        },
                         (KeyCode::Down, m) if m.is_empty() => {
                             if !app.results.is_empty() {
                                 app.selected = (app.selected + 1).min(app.results.len() - 1);
@@ -131,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('q'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
                             player.stop();
                             player.queue.clear();
-                            break;
+                            break 'home;
                         },
                         (KeyCode::Char('p'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
                             if player.status == "Playing" {
@@ -152,6 +162,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 match (key.code, key.modifiers) {
+                    (KeyCode::Backspace, m) if m.is_empty() => {
+                        player.stop();
+                        player.queue.clear();
+                        continue 'home;
+                    },
                     // Special case: if user types exactly :library, show library in results
                     (KeyCode::Char(c), m) if m.is_empty() => {
                         if !app.searching && app.results.is_empty() {
@@ -255,7 +270,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         player.stop();
                         player.queue.clear();
                         needs_redraw = true;
-                        break;
+                        break 'home;
                     },
                     (KeyCode::Char('p'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
                         // Ctrl+p: Toggle pause/resume
@@ -353,12 +368,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             needs_redraw = true;
                         }
                     },
-                    (KeyCode::Backspace, m) if m.is_empty() => {
-                        if !app.searching && app.results.is_empty() {
-                            app.input.pop();
-                            needs_redraw = true;
-                        }
-                    },
                     (KeyCode::Esc, m) if m.is_empty() => {
                         if !app.results.is_empty() {
                             app.results.clear();
@@ -381,6 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Optionally, force redraw every N ticks for safety (not strictly needed)
         }
     }
+    }
 // Save and load library to a file in the Music directory
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
@@ -388,4 +398,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (Performance summary output removed)
     Ok(())
 }
-

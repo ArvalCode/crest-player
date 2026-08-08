@@ -65,15 +65,15 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     state.select(Some(app.selected));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(
-            "Results (arrows, Ctrl+a to queue, Ctrl+l to like, v to view library, Esc to search again, Ctrl+q to quit, Ctrl+p to pause/resume, Ctrl+n to next)"
+            "Results (arrows, Ctrl+a queue, Ctrl+l like, v library, Esc search, Backspace home, Ctrl+q quit)"
         ))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, vchunks[1], &mut state);
 
     let help = if app.results.is_empty() {
-        "Type your search and press Enter. Ctrl+q to quit."
+        "Type your search and press Enter. Backspace returns Home. Ctrl+q quits."
     } else {
-        "Navigate with arrows, Enter to play, Ctrl+a to queue, Ctrl+l to like, v to view library, Esc to search again, Ctrl+q to quit. Ctrl+p to pause/resume. Ctrl+n to next."
+        "Arrows navigate, Enter plays, Ctrl+a queues, Ctrl+l likes, Esc searches again, Backspace returns Home."
     };
     let help = if let Some(err) = &app.error {
         err.as_str()
@@ -85,9 +85,9 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
 
     // Player bar
     let player_text = if let Some(title) = &player.title {
-        format!("▶ {} [{}] (Ctrl+p to pause/resume, Ctrl+n to next, Ctrl+q to quit)", title, player.status)
+        format!("▶ {} [{}] (Ctrl+p pause/resume, Ctrl+n next, Backspace home, Ctrl+q quit)", title, player.status)
     } else {
-        format!("▶ [No song playing] [{}] (Ctrl+p to pause/resume, Ctrl+n to next, Ctrl+q to quit)", player.status)
+        format!("▶ [No song playing] [{}] (Ctrl+p pause/resume, Ctrl+n next, Backspace home, Ctrl+q quit)", player.status)
     };
     let player_bar = Paragraph::new(player_text).block(Block::default().borders(Borders::ALL).title("Player"));
     f.render_widget(player_bar, vchunks[3]);

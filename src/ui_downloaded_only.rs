@@ -24,7 +24,7 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
 
     // No search bar, just a title
     let input = Paragraph::new("")
-        .block(Block::default().borders(Borders::ALL).title("Downloaded Songs (arrows to navigate, Enter/Ctrl+a to play/queue)"));
+        .block(Block::default().borders(Borders::ALL).title("Downloaded Songs (arrows navigate, Enter/Ctrl+a play/queue, Backspace home)"));
     f.render_widget(input, vchunks[0]);
 
     // Results panel is the downloaded songs
@@ -61,7 +61,7 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     state.select(Some(app.selected));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(
-            "Downloaded Songs (arrows, Enter/Ctrl+a to play/queue, Ctrl+n next, Ctrl+p pause/resume, Ctrl+q quit)"
+            "Downloaded Songs (arrows, Enter/Ctrl+a play/queue, Ctrl+n next, Backspace home, Ctrl+q quit)"
         ))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, vchunks[1], &mut state);
@@ -69,16 +69,16 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     let help = if app.results.is_empty() {
         "No downloaded songs found."
     } else {
-        "Navigate with arrows, Enter/Ctrl+a to play/queue, Ctrl+n next, Ctrl+p pause/resume, Ctrl+q quit."
+        "Arrows navigate, Enter/Ctrl+a plays or queues, Ctrl+n skips, Backspace returns Home, Ctrl+q quits."
     };
     let help = Paragraph::new(help).block(Block::default().borders(Borders::ALL));
     f.render_widget(help, vchunks[2]);
 
     // Player bar
     let player_text = if let Some(title) = &player.title {
-        format!("▶ {} [{}] (Ctrl+p to pause/resume, Ctrl+n to next, Ctrl+q to quit)", title, player.status)
+        format!("▶ {} [{}] (Ctrl+p pause/resume, Ctrl+n next, Backspace home, Ctrl+q quit)", title, player.status)
     } else {
-        format!("▶ [No song playing] [{}] (Ctrl+p to pause/resume, Ctrl+n to next, Ctrl+q to quit)", player.status)
+        format!("▶ [No song playing] [{}] (Ctrl+p pause/resume, Ctrl+n next, Backspace home, Ctrl+q quit)", player.status)
     };
     let player_bar = Paragraph::new(player_text).block(Block::default().borders(Borders::ALL).title("Player"));
     f.render_widget(player_bar, vchunks[3]);
