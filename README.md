@@ -116,6 +116,73 @@ Idle, Ambient, or Cinema view.
    crest-player
    ```
 
+## Windows (PowerShell)
+
+These steps build and run Crest Player natively on Windows 10 or 11.
+
+1. Install the Microsoft C++ Build Tools with the **Desktop development with
+   C++** workload, then install Rust through `rustup`. Rust's Windows toolchain
+   requires the MSVC build tools. See the official [Rust installation guide](https://rust-lang.org/tools/install/)
+   and [Microsoft's Rust setup guide](https://learn.microsoft.com/windows/dev-environment/rust/setup).
+
+   If WinGet is available, install `rustup` from PowerShell:
+
+   ```powershell
+   winget install --id Rustlang.Rustup --exact
+   winget install --id Git.Git --exact
+   ```
+
+2. Install `yt-dlp` and FFmpeg. Crest Player calls `yt-dlp`, `ffmpeg`, and
+   `ffplay` by name, so all three executables must be available on `PATH`.
+
+   ```powershell
+   winget install yt-dlp
+   winget install --id Gyan.FFmpeg --exact
+   ```
+
+   The `yt-dlp` project documents WinGet as a supported Windows installation
+   method in its [installation guide](https://github.com/yt-dlp/yt-dlp/wiki/Installation).
+   Close and reopen PowerShell after installing packages so `PATH` changes take
+   effect.
+
+3. Verify the required commands:
+
+   ```powershell
+   git --version
+   cargo --version
+   yt-dlp --version
+   ffmpeg -version
+   ffplay -version
+   ```
+
+4. Clone, build, and run Crest Player:
+
+   ```powershell
+   git clone https://github.com/ArvalCode/crest-player.git
+   Set-Location crest-player
+   cargo build --release
+   .\target\release\crest-player.exe
+   ```
+
+   Windows Terminal is recommended for the best ANSI true-color and Unicode
+   rendering. Increase the terminal window size if the wallpaper or video looks
+   cramped.
+
+### Windows data locations
+
+- Settings: `%APPDATA%\crest-player\settings.json`
+- Captured Home wallpaper: `%APPDATA%\crest-player\home-wallpaper.rgb`
+- Downloaded library and its index: the current user's Music folder
+- Temporary streamed audio and video: the current user's temporary directory
+
+### Current Windows limitation
+
+Native Windows playback, searching, downloading, video rendering, seeking, and
+skipping are supported. Pause/resume with `Ctrl+P` currently relies on Unix
+process signals, so that shortcut does not suspend `ffplay` correctly in a
+native Windows session. Running Crest Player inside WSL with Linux audio support
+uses the Linux behavior.
+
 ## Uninstalling
 
 To completely remove Crest Player from your system:
@@ -128,6 +195,11 @@ To completely remove Crest Player from your system:
    ```sh
    rm -rf /home/arval/Documents/VSProjects/crest-player
    ```
+
+On Windows, remove the cloned repository (and any copied
+`crest-player.exe`). To reset application data as well, remove
+`%APPDATA%\crest-player`; downloaded songs remain in the user's Music folder
+unless removed separately.
 
 ## License
 MIT
