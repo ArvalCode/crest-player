@@ -13,7 +13,6 @@ use ratatui::{
 pub enum IdleStage {
     #[default]
     Active,
-    Idle,
     Ambient,
     Cinema,
 }
@@ -120,8 +119,7 @@ impl IdleMode {
         } else {
             match self.last_activity.elapsed().as_secs() {
                 0..=4 => IdleStage::Active,
-                5..=14 => IdleStage::Idle,
-                15..=29 => IdleStage::Ambient,
+                5..=479 => IdleStage::Ambient,
                 _ => IdleStage::Cinema,
             }
         };
@@ -172,7 +170,6 @@ pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
     );
 
     let margin = match stage {
-        IdleStage::Idle => 3,
         IdleStage::Ambient => 1,
         IdleStage::Cinema | IdleStage::Active => 0,
     };
@@ -182,7 +179,6 @@ pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(match stage {
-                IdleStage::Idle => " IDLE · ` capture wallpaper · any other input to return ",
                 IdleStage::Ambient => " AMBIENT · ` capture wallpaper · any other input to return ",
                 _ => "",
             })

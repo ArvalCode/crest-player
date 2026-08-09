@@ -14,18 +14,18 @@ ASCII music-video display when left idle.
   On Linux this is normally `~/.config/crest-player/settings.json`.
 - Stream audio through `yt-dlp` and `ffplay` or play a downloaded-only library.
 - Download and save favorite tracks locally.
+- Permanently remove selected downloaded songs from the library with `Delete`.
 - Display synchronized lyrics with optional Japanese romaji.
 - Fall back to timed manual or automatic YouTube video captions when the lyrics
   service has no result.
 - Show available Latin-letter pronunciation lines alongside original lyrics with
   the default-on **English Pronunciations** Home setting.
 - Overlay the current synchronized lyric and a preview of the next line throughout
-  Idle, Ambient, and Cinema without resizing the video area.
+  Ambient and Cinema without resizing the video area.
 - Seek, pause, resume, and skip queued tracks.
 - Enter a staged YouTube music-video screensaver while music is playing:
-  - **Idle** after 5 seconds.
-  - **Ambient** after 15 seconds.
-  - **Cinema** after 30 seconds.
+  - **Ambient** after 5 seconds.
+  - **Cinema** after 8 minutes.
 - Render video as fast color ASCII, detailed dithered ASCII, or ANSI true-color half-block pixels.
 - Select low, medium, or high color precision. Lower precision reduces terminal
   color changes and output bandwidth; high precision preserves the full RGB frame.
@@ -82,10 +82,10 @@ recommended when a smoother playback experience is needed.
 | Input | Action |
 | --- | --- |
 | Arrow keys | Navigate results and library entries |
-| `Enter` | Search, play, or activate a Home option |
+| `Enter` | Search, play, queue, or activate a Home option |
 | `Backspace` | Delete the previous character while entering a search |
-| `Ctrl+A` | Add the selected track to the queue |
 | `Ctrl+L` | Download/save the selected track |
+| `Delete` | Permanently remove the selected song from the library |
 | `Ctrl+P` | Pause or resume |
 | `Ctrl+N` | Skip to the next queued track |
 | `Alt++` / `Alt+-` | Seek forward/backward five seconds |
@@ -95,10 +95,24 @@ recommended when a smoother playback experience is needed.
 | `Home` (`Fn+Left Arrow` on compact keyboards) | Return to Home |
 | `Ctrl+Q` | Quit |
 
+### Downloaded-library commands
+
+In **Downloaded Music Only** mode, type commands into the command bar and press
+`Enter` to run them:
+
+| Command | Action |
+| --- | --- |
+| `:shuffle queue` | Randomize the current playback queue |
+| `:shuffle all` | Add every downloaded library song to the queue, then randomize it |
+| `:clear` | Empty the playback queue without stopping the current song |
+
+Command names and arguments are separated by spaces. `Esc` clears the command
+bar without running it.
+
 While the screensaver is visible, the first intentional input restores the normal
 interface and is consumed so it cannot accidentally activate a control. Playback
 shortcuts (`Ctrl+P`, `Ctrl+N`, `Alt++`, and `Alt+-`) operate without leaving the
-Idle, Ambient, or Cinema view.
+Ambient or Cinema view.
 
 ## Getting Started
 1. Ensure you have Rust and Cargo installed.

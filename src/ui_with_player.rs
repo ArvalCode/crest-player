@@ -83,7 +83,7 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     state.select(Some(app.selected));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(
-            "Results (arrows, Ctrl+a queue, Ctrl+l like, v library, Esc search, Home return, Ctrl+q quit)"
+            "Results (arrows, Enter play/queue, Ctrl+l like, v library, Esc search, Home return, Ctrl+q quit)"
         ))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, vchunks[1], &mut state);
@@ -91,7 +91,7 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     let help = if app.results.is_empty() {
         "Type your search, Backspace edits, and Enter searches. Home returns to the menu. Ctrl+q quits."
     } else {
-        "Arrows navigate, Enter plays, Ctrl+a queues, Ctrl+l likes, Esc searches again, Home returns to the menu."
+        "Arrows navigate, Enter plays or queues, Ctrl+l likes, Esc searches again, Home returns to the menu."
     };
     let help = if let Some(err) = &app.error {
         err.as_str()
@@ -119,9 +119,9 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
 
     // Right panel: queue or library
     let right_title = if app.show_library {
-        "Library (v to close)"
+        "Library (Delete removes, v closes)"
     } else {
-        "Queue (Ctrl+a to add)"
+        "Queue"
     };
     let right_items: Vec<ListItem> = if app.show_library {
         app.library

@@ -125,6 +125,19 @@ impl App {
         self.available_library_paths.insert(path.clone());
         self.library.push((title, path));
     }
+
+    pub fn remove_library_track(&mut self, path: &str) -> std::io::Result<()> {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        self.library
+            .retain(|(_, library_path)| library_path != path);
+        self.library_paths.remove(path);
+        self.available_library_paths.remove(path);
+        Ok(())
+    }
 }
 
 fn normalize_existing_path(path: String) -> String {

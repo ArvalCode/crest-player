@@ -4,6 +4,7 @@ mod player;
 mod ui_with_player;
 mod ui_downloaded_only;
 mod draw_startup_screen;
+mod download_commands;
 mod lyrics;
 mod search;
 mod recommendations;
@@ -33,6 +34,7 @@ use ui_with_player::ui_with_player;
 use draw_startup_screen::{
     HOME_OPTION_COUNT, RESET_WALLPAPER_SETTING, SETTINGS_OPTION_COUNT, draw_startup_screen,
 };
+use download_commands::DownloadCommand;
 use search::{search_youtube, download_audio};
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use idle_mode::{draw_idle_mode, IdleMode, IdleRenderState};
@@ -645,6 +647,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::PageUp, m) if m.is_empty() => {
                             app.lyrics_scroll = app.lyrics_scroll.saturating_sub(5);
                         },
+                        (KeyCode::Backspace, m) if m.is_empty() => {
+                            app.input.pop();
+                            app.error = None;
+                        },
+                        (KeyCode::Esc, m) if m.is_empty() => {
+                            app.input.clear();
+                            app.error = None;
+                        },
                         (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                             player.seek_by(5);
                         },
@@ -662,7 +672,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         },
                         (KeyCode::Enter, m) if m.is_empty() => {
-                            if !app.results.is_empty() {
+                            if !app.input.trim().is_empty() {
+                                app.error = Some(match DownloadCommand::parse(&app.input) {
+                                    Ok(command) => command.execute(&app.library, &mut player.queue),
+                                    Err(message) => message,
+                                });
+                                app.input.clear();
+                            } else if !app.results.is_empty() {
                                 let (title, path) = &app.results[app.selected];
                                 if player.child.is_some() {
                                     player.queue.push((title.clone(), path.clone()));
@@ -671,13 +687,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         },
-                        (KeyCode::Char('a'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        (KeyCode::Char(character), m) if m.is_empty() => {
+                            if !app.input.is_empty() || character == ':' {
+                                app.input.push(character);
+                                app.error = None;
+                            }
+                        },
+                        (KeyCode::Delete, m) if m.is_empty() => {
                             if !app.results.is_empty() {
-                                let (title, path) = &app.results[app.selected];
-                                if player.child.is_some() {
-                                    player.queue.push((title.clone(), path.clone()));
+                                let path = app.results[app.selected].1.clone();
+                                if let Err(error) = app.remove_library_track(&path) {
+                                    app.error = Some(format!("Could not delete song: {error}"));
                                 } else {
-                                    player.play(path, title);
+                                    app.results.retain(|(_, result_path)| result_path != &path);
+                                    app.selected = app.selected.min(app.results.len().saturating_sub(1));
+                                    save_library(&app.library);
                                 }
                             }
                         },
@@ -817,29 +841,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         needs_redraw = true;
                     },
-                    (KeyCode::Char('a'), m) if m.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                        // Ctrl+a: Add selected to queue (works for both search results and library)
-                        if app.show_library {
-                            if !app.library.is_empty() {
-                                let (title, path) = &app.library[app.selected];
-                                // Add local file to queue (and play immediately if nothing is playing)
-                                if player.child.is_some() {
-                                    player.queue.push((title.clone(), path.clone()));
-                                } else {
-                                    player.play(path, title);
-                                }
-                                needs_redraw = true;
+                    (KeyCode::Delete, m) if m.is_empty() && app.show_library => {
+                        if !app.library.is_empty() {
+                            let path = app.library[app.selected].1.clone();
+                            if let Err(error) = app.remove_library_track(&path) {
+                                app.error = Some(format!("Could not delete song: {error}"));
+                            } else {
+                                app.selected = app.selected.min(app.library.len().saturating_sub(1));
+                                save_library(&app.library);
                             }
-                        } else if !app.results.is_empty() {
-                            let (title, id) = &app.results[app.selected];
-                            queue_youtube_download(
-                                &mut player,
-                                &download_tx,
-                                &video_prefetch_tx,
-                                app.idle_video_enabled,
-                                title,
-                                id,
-                            );
                             needs_redraw = true;
                         }
                     },

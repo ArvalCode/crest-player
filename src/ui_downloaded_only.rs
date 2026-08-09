@@ -33,11 +33,10 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
         ])
         .split(main_chunks[0]);
 
-    // No search bar, just a title
-    let input = Paragraph::new("").block(
+    let input = Paragraph::new(app.input.as_str()).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Downloaded Songs (arrows navigate, Enter/Ctrl+a play/queue, Home returns)"),
+            .title("Library Commands (:shuffle queue · :shuffle all · :clear)"),
     );
     f.render_widget(input, vchunks[0]);
 
@@ -78,15 +77,17 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     state.select(Some(app.selected));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(
-            "Downloaded Songs (arrows, Enter/Ctrl+a play/queue, Ctrl+n next, Home return, Ctrl+q quit)"
+            "Downloaded Songs (arrows, Enter play/queue, Delete remove, Ctrl+n next, Home return, Ctrl+q quit)"
         ))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, vchunks[1], &mut state);
 
-    let help = if app.results.is_empty() {
+    let help = if let Some(message) = &app.error {
+        message.as_str()
+    } else if app.results.is_empty() {
         "No downloaded songs found."
     } else {
-        "Arrows navigate, Enter/Ctrl+a plays or queues, Ctrl+n skips, Home returns to the menu, Ctrl+q quits."
+        "Arrows navigate, Enter plays or queues, Delete removes, Ctrl+n skips, Home returns, Ctrl+q quits."
     };
     let help = Paragraph::new(help).block(Block::default().borders(Borders::ALL));
     f.render_widget(help, vchunks[2]);
@@ -108,7 +109,7 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     f.render_widget(player_bar, vchunks[3]);
 
     // Right panel: queue
-    let right_title = "Queue (Ctrl+a to add)";
+    let right_title = "Queue";
     let right_items: Vec<ListItem> = player
         .queue
         .iter()
