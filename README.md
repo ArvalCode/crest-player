@@ -58,6 +58,13 @@ lighter-weight rendering. The **Color Precision** setting cycles between Low,
 Medium, and High to balance terminal performance against color fidelity.
 Synchronized lyrics remain overlaid on the video.
 
+Use `Ctrl+Shift++` or `Ctrl+Shift+-` in supported terminal emulators to increase
+or decrease the terminal font size. A smaller font provides Crest Player with
+more rows and columns, increasing the apparent resolution and detail of the
+ASCII video; a larger font produces a coarser image that may render faster.
+These shortcuts are controlled by the terminal emulator and may vary if its key
+bindings have been customized.
+
 Press `` ` `` while the video is visible to capture the current frame as the Home
 wallpaper, replacing the default Crest mascot. It fills the space inside the
 main white border above the separate, opaque menu and now-playing/navigation row
