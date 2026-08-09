@@ -1,6 +1,6 @@
 use crate::idle_mode::VideoRenderMode;
 use crate::lyrics::LyricLine;
-use crate::video_screensaver::VideoFrame;
+use crate::wallpaper::HomeWallpaper;
 use dirs::audio_dir;
 use serde::{Deserialize, Serialize};
 
@@ -56,11 +56,6 @@ pub struct App {
     pub home_wallpaper: Option<HomeWallpaper>,
 }
 
-pub struct HomeWallpaper {
-    pub frame: VideoFrame,
-    pub render_mode: VideoRenderMode,
-}
-
 impl App {
     pub fn new() -> Self {
         let settings = load_settings();
@@ -92,67 +87,9 @@ impl App {
             },
             hardware_acceleration_enabled: settings.hardware_acceleration_enabled,
             autoplay_enabled: settings.autoplay_enabled,
-            home_wallpaper: load_home_wallpaper(),
+            home_wallpaper: HomeWallpaper::load(),
         }
     }
-}
-
-fn wallpaper_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|directory| directory.join("crest-player/home-wallpaper.rgb"))
-}
-
-fn load_home_wallpaper() -> Option<HomeWallpaper> {
-    let bytes = std::fs::read(wallpaper_path()?).ok()?;
-    if bytes.len() < 9 || &bytes[..4] != b"CWP1" {
-        return None;
-    }
-    let render_mode = match bytes[4] {
-        1 => VideoRenderMode::AsciiDetailed,
-        2 => VideoRenderMode::ColorPixels,
-        _ => VideoRenderMode::AsciiFast,
-    };
-    let width = u16::from_le_bytes([bytes[5], bytes[6]]);
-    let height = u16::from_le_bytes([bytes[7], bytes[8]]);
-    let frame = VideoFrame::from_rgb(width, height, bytes[9..].to_vec())?;
-    Some(HomeWallpaper { frame, render_mode })
-}
-
-pub fn save_home_wallpaper(app: &mut App, frame: &VideoFrame) -> std::io::Result<()> {
-    let Some(path) = wallpaper_path() else {
-        return Err(std::io::Error::other("configuration directory is unavailable"));
-    };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mode = match app.idle_video_render_mode {
-        VideoRenderMode::AsciiFast => 0,
-        VideoRenderMode::AsciiDetailed => 1,
-        VideoRenderMode::ColorPixels => 2,
-    };
-    let mut bytes = Vec::with_capacity(9 + frame.pixels.len());
-    bytes.extend_from_slice(b"CWP1");
-    bytes.push(mode);
-    bytes.extend_from_slice(&frame.width.to_le_bytes());
-    bytes.extend_from_slice(&frame.height.to_le_bytes());
-    bytes.extend_from_slice(&frame.pixels);
-    std::fs::write(path, bytes)?;
-    app.home_wallpaper = Some(HomeWallpaper {
-        frame: frame.clone(),
-        render_mode: app.idle_video_render_mode,
-    });
-    Ok(())
-}
-
-pub fn reset_home_wallpaper(app: &mut App) -> std::io::Result<()> {
-    if let Some(path) = wallpaper_path() {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    app.home_wallpaper = None;
-    Ok(())
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {

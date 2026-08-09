@@ -1,9 +1,13 @@
-use crate::app::HomeWallpaper;
-use crate::idle_mode::{draw_video_frame, VideoRenderMode};
+use crate::idle_mode::{VideoRenderMode, draw_video_frame};
+use crate::wallpaper::HomeWallpaper;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+pub const HOME_OPTION_COUNT: usize = 3;
+pub const SETTINGS_OPTION_COUNT: usize = 9;
+pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
 pub fn draw_startup_screen(
@@ -190,52 +194,7 @@ pub fn draw_startup_screen(
     };
 
     if !settings_page && let Some(wallpaper) = home_wallpaper {
-        let outer = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::White))
-            .title("Crest Player");
-        let inner = outer.inner(f.size());
-        f.render_widget(outer, f.size());
-        let home_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(6),
-                Constraint::Length(1),
-                Constraint::Length(option_lines.len() as u16 + 2),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-        draw_video_frame(
-            f,
-            home_layout[0],
-            &wallpaper.frame,
-            wallpaper.render_mode,
-        );
-        f.render_widget(Clear, home_layout[1]);
-        f.render_widget(Clear, home_layout[2]);
-        f.render_widget(Clear, home_layout[3]);
-        f.render_widget(Clear, home_layout[4]);
-
-        let menu_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::White))
-            .title(" Menu ")
-            .style(Style::default().bg(Color::Black));
-        let menu_area = menu_block.inner(home_layout[2]);
-        f.render_widget(menu_block, home_layout[2]);
-        f.render_widget(
-            Paragraph::new(option_lines)
-                .alignment(Alignment::Center)
-                .style(Style::default().bg(Color::Black)),
-            menu_area,
-        );
-        f.render_widget(
-            Paragraph::new(hint_text)
-                .alignment(Alignment::Center)
-                .style(Style::default().bg(Color::Black)),
-            home_layout[4],
-        );
+        draw_wallpaper_home(f, wallpaper, option_lines, hint_text);
         return;
     }
 
@@ -267,4 +226,53 @@ pub fn draw_startup_screen(
 
     let hint = Paragraph::new(hint_text).alignment(Alignment::Center);
     f.render_widget(hint, layout[4]);
+}
+
+fn draw_wallpaper_home(
+    frame: &mut ratatui::Frame,
+    wallpaper: &HomeWallpaper,
+    option_lines: Vec<Line<'static>>,
+    hint_text: String,
+) {
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::White))
+        .title("Crest Player");
+    let inner = outer.inner(frame.size());
+    frame.render_widget(outer, frame.size());
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(6),
+            Constraint::Length(1),
+            Constraint::Length(option_lines.len() as u16 + 2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    draw_video_frame(frame, layout[0], &wallpaper.frame, wallpaper.render_mode);
+    for area in [layout[1], layout[2], layout[3], layout[4]] {
+        frame.render_widget(Clear, area);
+    }
+
+    let menu = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::White))
+        .title(" Menu ")
+        .style(Style::default().bg(Color::Black));
+    let menu_inner = menu.inner(layout[2]);
+    frame.render_widget(menu, layout[2]);
+    frame.render_widget(
+        Paragraph::new(option_lines)
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(Color::Black)),
+        menu_inner,
+    );
+    frame.render_widget(
+        Paragraph::new(hint_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(Color::Black)),
+        layout[4],
+    );
 }

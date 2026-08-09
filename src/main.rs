@@ -9,6 +9,7 @@ mod search;
 mod recommendations;
 mod idle_mode;
 mod video_screensaver;
+mod wallpaper;
 
 
 use std::io::{self, BufWriter, Write};
@@ -25,15 +26,18 @@ use crossterm::{
 };
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
-use app::{App, reset_home_wallpaper, save_home_wallpaper, save_library, save_settings};
+use app::{App, save_library, save_settings};
 use player::Player;
 use lyrics::{Lyrics, fetch_lyrics_with_caption_fallback};
 use ui_with_player::ui_with_player;
-use draw_startup_screen::draw_startup_screen;
+use draw_startup_screen::{
+    HOME_OPTION_COUNT, RESET_WALLPAPER_SETTING, SETTINGS_OPTION_COUNT, draw_startup_screen,
+};
 use search::{search_youtube, download_audio};
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use idle_mode::{draw_idle_mode, IdleMode};
 use video_screensaver::VideoScreensaver;
+use wallpaper::HomeWallpaper;
 
 struct FramePacer {
     fps: u16,
@@ -310,16 +314,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match key.code {
                     KeyCode::Up => {
                         if settings_page {
-                            settings_selected = settings_selected.checked_sub(1).unwrap_or(8);
+                            settings_selected = settings_selected
+                                .checked_sub(1)
+                                .unwrap_or(SETTINGS_OPTION_COUNT - 1);
                         } else {
-                            startup_selected = startup_selected.checked_sub(1).unwrap_or(2);
+                            startup_selected = startup_selected
+                                .checked_sub(1)
+                                .unwrap_or(HOME_OPTION_COUNT - 1);
                         }
                     }
                     KeyCode::Down => {
                         if settings_page {
-                            settings_selected = (settings_selected + 1) % 9;
+                            settings_selected = (settings_selected + 1) % SETTINGS_OPTION_COUNT;
                         } else {
-                            startup_selected = (startup_selected + 1) % 3;
+                            startup_selected = (startup_selected + 1) % HOME_OPTION_COUNT;
                         }
                     }
                     KeyCode::Enter => {
@@ -370,9 +378,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             7 => {
                                 app.autoplay_enabled = !app.autoplay_enabled;
                             }
-                            8 => {
-                                if let Err(error) = reset_home_wallpaper(&mut app) {
+                            RESET_WALLPAPER_SETTING => {
+                                if let Err(error) = HomeWallpaper::remove_saved() {
                                     app.error = Some(format!("Could not reset wallpaper: {error}"));
+                                } else {
+                                    app.home_wallpaper = None;
                                 }
                             }
                             _ => {}
@@ -532,9 +542,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::Key(key)
                         if key.code == KeyCode::Char('`') && key.modifiers.is_empty() => {
                         if let Some(frame) = video_screensaver.frame().cloned()
-                            && let Err(error) = save_home_wallpaper(&mut app, &frame)
                         {
-                            app.error = Some(format!("Could not save wallpaper: {error}"));
+                            let wallpaper = HomeWallpaper::capture(
+                                &frame,
+                                app.idle_video_render_mode,
+                            );
+                            if let Err(error) = wallpaper.save() {
+                                app.error = Some(format!("Could not save wallpaper: {error}"));
+                            } else {
+                                app.home_wallpaper = Some(wallpaper);
+                            }
                         }
                         true
                     }
