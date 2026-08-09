@@ -167,9 +167,9 @@ fn queue_youtube_download(
     title: &str,
     video_id: &str,
 ) {
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let url = format!("https://www.youtube.com/watch?v={video_id}");
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -221,23 +221,34 @@ fn queue_youtube_download(
     let sender = sender.clone();
     let title = title.to_string();
     std::thread::spawn(move || {
-        let success = Command::new("yt-dlp")
+        let output = Command::new("yt-dlp")
             .args([
                 "-f",
                 "bestaudio",
                 "-x",
                 "--audio-format",
                 "mp3",
+                "--print",
+                "%(title)s",
                 "-o",
                 &path_string,
                 &url,
             ])
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+            .output();
+        let success = output.as_ref().is_ok_and(|output| output.status.success());
+        let title = output
+            .as_ref()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .last()
+                    .map(str::to_string)
+            })
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or(title);
         let _ = sender.send(DownloadFinished {
             title,
             path: path_string,

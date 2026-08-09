@@ -119,7 +119,7 @@ impl IdleMode {
         } else {
             match self.last_activity.elapsed().as_secs() {
                 0..=4 => IdleStage::Active,
-                5..=479 => IdleStage::Ambient,
+                5..=7 => IdleStage::Ambient,
                 _ => IdleStage::Cinema,
             }
         };

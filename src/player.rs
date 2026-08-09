@@ -246,7 +246,13 @@ impl Player {
                 Err(_) => false,
             }
         } else {
-            false
+            if self.status != "Downloading..." && !self.queue.is_empty() {
+                let (title, path) = self.queue.remove(0);
+                self.play(&path, &title);
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -303,5 +309,38 @@ impl Player {
             self.playback_started = Some(Instant::now());
             self.status = "Playing".to_string();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Player;
+
+    #[test]
+    fn idle_player_consumes_the_next_queue_entry() {
+        let mut player = Player::new();
+        player.queue.push((
+            "Missing".to_string(),
+            "definitely-missing-track".to_string(),
+        ));
+
+        assert!(player.is_playing());
+        assert!(player.queue.is_empty());
+        assert!(player.status.starts_with("Invalid file or ID:"));
+    }
+
+    #[test]
+    fn idle_player_waits_for_a_downloading_queue_entry() {
+        let mut player = Player::new();
+        player.queue.push((
+            "Pending (Downloading...)".to_string(),
+            "ytmusic_play_pending_test.mp3".to_string(),
+        ));
+
+        assert!(player.is_playing());
+        assert_eq!(player.status, "Downloading...");
+        assert_eq!(player.queue.len(), 1);
+        assert!(!player.is_playing());
+        assert_eq!(player.queue.len(), 1);
     }
 }

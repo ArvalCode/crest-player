@@ -25,7 +25,7 @@ ASCII music-video display when left idle.
 - Seek, pause, resume, and skip queued tracks.
 - Enter a staged YouTube music-video screensaver while music is playing:
   - **Ambient** after 5 seconds.
-  - **Cinema** after 8 minutes.
+  - **Cinema** after 8 seconds.
 - Render video as fast color ASCII, detailed dithered ASCII, or ANSI true-color half-block pixels.
 - Select low, medium, or high color precision. Lower precision reduces terminal
   color changes and output bandwidth; high precision preserves the full RGB frame.
