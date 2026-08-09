@@ -9,13 +9,14 @@ pub fn draw_startup_screen(
     f: &mut ratatui::Frame,
     page: (bool, usize),
     lyric_settings: (bool, bool, bool),
-    video_settings: (bool, VideoRenderMode, u16),
+    video_settings: (bool, VideoRenderMode, u16, bool),
     autoplay_enabled: bool,
     playback: (Option<&str>, &str),
 ) {
     let (settings_page, selected) = page;
     let (lyrics_enabled, live_sync_enabled, pronunciations_enabled) = lyric_settings;
-    let (idle_video_enabled, idle_video_render_mode, idle_video_fps) = video_settings;
+    let (idle_video_enabled, idle_video_render_mode, idle_video_fps, hardware_acceleration_enabled) =
+        video_settings;
     // Flamingo C ASCII art (red)
     let flamingo = vec![
         r"                                            *******,           /#,",
@@ -104,6 +105,14 @@ pub fn draw_startup_screen(
                     _ => "Video FPS: 15",
                 },
                 "Cycle the music-video rendering frame rate between 15, 30, and 60 FPS.",
+            ),
+            (
+                if hardware_acceleration_enabled {
+                    "Hardware Acceleration: AUTO"
+                } else {
+                    "Hardware Acceleration: OFF"
+                },
+                "Try hardware video decoding, with automatic software fallback.",
             ),
             (
                 if autoplay_enabled {

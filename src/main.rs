@@ -253,6 +253,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut idle_mode = IdleMode::new();
     let mut video_screensaver = VideoScreensaver::new();
     let mut frame_pacer = FramePacer::new();
+    let mut last_rendered_video_frame = 0u64;
+    let mut last_rendered_video_second = 0u64;
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadFinished>();
     let (video_prefetch_tx, video_prefetch_rx) =
@@ -297,6 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.idle_video_enabled,
                 app.idle_video_render_mode,
                 app.idle_video_fps,
+                app.hardware_acceleration_enabled,
             ),
             app.autoplay_enabled,
             (player.title.as_deref(), player.status.as_str()),
@@ -306,14 +309,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match key.code {
                     KeyCode::Up => {
                         if settings_page {
-                            settings_selected = settings_selected.checked_sub(1).unwrap_or(6);
+                            settings_selected = settings_selected.checked_sub(1).unwrap_or(7);
                         } else {
                             startup_selected = startup_selected.checked_sub(1).unwrap_or(2);
                         }
                     }
                     KeyCode::Down => {
                         if settings_page {
-                            settings_selected = (settings_selected + 1) % 7;
+                            settings_selected = (settings_selected + 1) % 8;
                         } else {
                             startup_selected = (startup_selected + 1) % 3;
                         }
@@ -359,6 +362,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 };
                             }
                             6 => {
+                                app.hardware_acceleration_enabled =
+                                    !app.hardware_acceleration_enabled;
+                                video_screensaver.restart();
+                            }
+                            7 => {
                                 app.autoplay_enabled = !app.autoplay_enabled;
                             }
                             _ => {}
@@ -412,6 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.idle_video_fps,
                 app.idle_video_render_mode.samples_per_cell(),
                 player.status == "Playing",
+                app.hardware_acceleration_enabled,
             ),
         );
         if needs_redraw {
@@ -458,6 +467,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if idle_mode.is_visible() {
                 frame_pacer.record(render_started.elapsed(), app.idle_video_fps);
+                last_rendered_video_frame = video_screensaver.frame_serial();
+                last_rendered_video_second = player.position().as_secs();
             }
             needs_redraw = false;
         }
@@ -950,7 +961,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .min(u32::MAX as u128) as u32;
             last_tick += tick_rate * elapsed_intervals;
             if idle_mode.is_visible() {
-                needs_redraw = true;
+                let video_frame = video_screensaver.frame_serial();
+                let video_second = player.position().as_secs();
+                // Do not rebuild and diff an identical terminal frame when the
+                // decoder or network is temporarily between frames. The fallback
+                // animation remains clock-driven and therefore still redraws.
+                if video_screensaver.frame().is_none()
+                    || video_frame != last_rendered_video_frame
+                    || video_second != last_rendered_video_second
+                {
+                    needs_redraw = true;
+                    last_rendered_video_frame = video_frame;
+                    last_rendered_video_second = video_second;
+                }
             }
         }
     }

@@ -12,6 +12,7 @@ struct PersistedSettings {
     idle_video_enabled: bool,
     idle_video_render_mode: String,
     idle_video_fps: u16,
+    hardware_acceleration_enabled: bool,
     autoplay_enabled: bool,
 }
 
@@ -24,6 +25,7 @@ impl Default for PersistedSettings {
             idle_video_enabled: true,
             idle_video_render_mode: "ascii_fast".to_string(),
             idle_video_fps: 15,
+            hardware_acceleration_enabled: false,
             autoplay_enabled: false,
         }
     }
@@ -48,6 +50,7 @@ pub struct App {
     pub idle_video_enabled: bool,
     pub idle_video_render_mode: VideoRenderMode,
     pub idle_video_fps: u16,
+    pub hardware_acceleration_enabled: bool,
     pub autoplay_enabled: bool,
 }
 
@@ -80,6 +83,7 @@ impl App {
                 30 | 60 => settings.idle_video_fps,
                 _ => 15,
             },
+            hardware_acceleration_enabled: settings.hardware_acceleration_enabled,
             autoplay_enabled: settings.autoplay_enabled,
         }
     }
@@ -110,6 +114,7 @@ pub fn save_settings(app: &App) {
         }
         .to_string(),
         idle_video_fps: app.idle_video_fps,
+        hardware_acceleration_enabled: app.hardware_acceleration_enabled,
         autoplay_enabled: app.autoplay_enabled,
     };
     if let Some(parent) = path.parent() {

@@ -21,7 +21,7 @@ pub struct VideoFrame {
 pub struct VideoScreensaver {
     receiver: Option<Receiver<VideoFrame>>,
     stop: Option<Arc<AtomicBool>>,
-    key: Option<(String, u16, u16, u16)>,
+    key: Option<(String, u16, u16, u16, bool)>,
     latest: Option<VideoFrame>,
     buffer: VecDeque<VideoFrame>,
     buffer_target: usize,
@@ -29,6 +29,12 @@ pub struct VideoScreensaver {
     buffering: bool,
     frame_interval: Duration,
     next_frame_at: Option<Instant>,
+    frame_serial: u64,
+}
+
+struct DecodePlan {
+    fps: u16,
+    hardware_acceleration: bool,
 }
 
 impl VideoScreensaver {
@@ -44,6 +50,7 @@ impl VideoScreensaver {
             buffering: true,
             frame_interval: Duration::from_millis(66),
             next_frame_at: None,
+            frame_serial: 0,
         }
     }
 
@@ -54,13 +61,13 @@ impl VideoScreensaver {
         position: Duration,
         width: u16,
         cell_height: u16,
-        settings: (u16, (u16, u16), bool),
+        settings: (u16, (u16, u16), bool, bool),
     ) {
         if !visible || source.is_none() || width == 0 || cell_height == 0 {
             self.stop();
             return;
         }
-        let (fps, samples_per_cell, playback_running) = settings;
+        let (fps, samples_per_cell, playback_running, hardware_acceleration) = settings;
         if !playback_running {
             self.suspend();
             return;
@@ -72,10 +79,25 @@ impl VideoScreensaver {
             30 | 60 => fps,
             _ => 15,
         };
-        let key = (source.clone(), pixel_width, pixel_height, fps);
+        let key = (
+            source.clone(),
+            pixel_width,
+            pixel_height,
+            fps,
+            hardware_acceleration,
+        );
         if self.key.as_ref() != Some(&key) {
             self.stop();
-            self.start(source, position, pixel_width, pixel_height, fps);
+            self.start(
+                source,
+                position,
+                pixel_width,
+                pixel_height,
+                DecodePlan {
+                    fps,
+                    hardware_acceleration,
+                },
+            );
         }
 
         let mut disconnected = false;
@@ -122,6 +144,7 @@ impl VideoScreensaver {
             .is_some_and(|frame| frame.presentation_time <= position)
         {
             self.latest = self.buffer.pop_front();
+            self.frame_serial = self.frame_serial.wrapping_add(1);
             frames_to_take += 1;
         }
         if self.buffer.is_empty() && frames_to_take == 0 {
@@ -141,11 +164,26 @@ impl VideoScreensaver {
         self.latest.as_ref()
     }
 
+    pub fn frame_serial(&self) -> u64 {
+        self.frame_serial
+    }
+
     pub fn restart(&mut self) {
         self.stop();
     }
 
-    fn start(&mut self, source: String, position: Duration, width: u16, height: u16, fps: u16) {
+    fn start(
+        &mut self,
+        source: String,
+        position: Duration,
+        width: u16,
+        height: u16,
+        plan: DecodePlan,
+    ) {
+        let DecodePlan {
+            fps,
+            hardware_acceleration,
+        } = plan;
         let buffer_target = fps as usize;
         let buffer_limit = buffer_target.saturating_mul(3);
         let (sender, receiver) = mpsc::sync_channel(buffer_limit);
@@ -192,12 +230,20 @@ impl VideoScreensaver {
             // Account for URL resolution time so video starts at the audio clock's
             // current position rather than where it was when the worker spawned.
             let synchronized_position = position + resolution_started.elapsed();
-            let mut child = match Command::new("ffmpeg")
-                .args([
-                    "-loglevel",
-                    "error",
-                    "-ss",
-                    &format!("{:.3}", synchronized_position.as_secs_f64()),
+            let frame_size = width as usize * height as usize * 3;
+            let attempts: &[bool] = if hardware_acceleration {
+                &[true, false]
+            } else {
+                &[false]
+            };
+            for &accelerated in attempts {
+                let seek = format!("{:.3}", synchronized_position.as_secs_f64());
+                let mut command = Command::new("ffmpeg");
+                command.args(["-loglevel", "error", "-ss", &seek]);
+                if accelerated {
+                    command.args(["-hwaccel", "auto"]);
+                }
+                command.args([
                     "-i",
                     &direct_url,
                     "-an",
@@ -208,45 +254,68 @@ impl VideoScreensaver {
                     "-f",
                     "rawvideo",
                     "pipe:1",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                Ok(child) => child,
-                Err(_) => return,
-            };
-            let Some(mut stdout) = child.stdout.take() else {
-                return;
-            };
-            let frame_size = width as usize * height as usize * 3;
-            let mut frame_index = 0u64;
-            while !worker_stop.load(Ordering::Relaxed) {
+                ]);
+                let Ok(mut child) = command
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                else {
+                    continue;
+                };
+                let Some(mut stdout) = child.stdout.take() else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    continue;
+                };
                 let mut pixels = vec![0; frame_size];
                 if stdout.read_exact(&mut pixels).is_err() {
-                    break;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    continue;
                 }
+                let mut frame_index = 0u64;
                 if sender
                     .send(VideoFrame {
                         width,
                         height,
                         pixels,
-                        presentation_time: synchronized_position
-                            + Duration::from_secs_f64(frame_index as f64 / f64::from(fps)),
+                        presentation_time: synchronized_position,
                     })
                     .is_err()
                 {
-                    break;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
                 }
                 frame_index = frame_index.saturating_add(1);
+                while !worker_stop.load(Ordering::Relaxed) {
+                    let mut pixels = vec![0; frame_size];
+                    if stdout.read_exact(&mut pixels).is_err() {
+                        break;
+                    }
+                    if sender
+                        .send(VideoFrame {
+                            width,
+                            height,
+                            pixels,
+                            presentation_time: synchronized_position
+                                + Duration::from_secs_f64(frame_index as f64 / f64::from(fps)),
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    frame_index = frame_index.saturating_add(1);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
             }
-            let _ = child.kill();
-            let _ = child.wait();
         });
         self.receiver = Some(receiver);
         self.stop = Some(stop);
-        self.key = Some((source, width, height, fps));
+        self.key = Some((source, width, height, fps, hardware_acceleration));
         self.buffer_target = buffer_target;
         self.buffer_limit = buffer_limit;
         self.buffering = true;
