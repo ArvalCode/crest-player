@@ -126,8 +126,8 @@ pub fn draw_idle_mode(
         let block = Block::default()
             .borders(Borders::ALL)
             .title(match stage {
-                IdleStage::Idle => " IDLE · any input to return ",
-                IdleStage::Ambient => " AMBIENT · any input to return ",
+                IdleStage::Idle => " IDLE · ` capture wallpaper · any other input to return ",
+                IdleStage::Ambient => " AMBIENT · ` capture wallpaper · any other input to return ",
                 _ => "",
             })
             .border_style(Style::default().fg(Color::DarkGray));
@@ -246,6 +246,32 @@ pub fn draw_idle_mode(
             clock_area,
         );
     }
+}
+
+pub fn draw_video_frame(
+    frame: &mut Frame,
+    area: Rect,
+    video: &VideoFrame,
+    render_mode: VideoRenderMode,
+) {
+    let mut lines = Vec::with_capacity(area.height as usize);
+    for y in 0..area.height {
+        let mut spans = Vec::with_capacity(area.width as usize);
+        for x in 0..area.width {
+            let top = video_color(video, x, y.saturating_mul(2), area).unwrap_or(Color::Black);
+            let bottom = video_color(video, x, y.saturating_mul(2).saturating_add(1), area)
+                .unwrap_or(Color::Black);
+            spans.push(match render_mode {
+                VideoRenderMode::AsciiFast => ascii_span(top, bottom, x, y, false),
+                VideoRenderMode::AsciiDetailed => ascii_span(top, bottom, x, y, true),
+                VideoRenderMode::ColorPixels => {
+                    Span::styled("▀", Style::default().fg(top).bg(bottom))
+                }
+            });
+        }
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn blend(top: Color, bottom: Color) -> Color {

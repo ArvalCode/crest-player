@@ -11,11 +11,27 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Clone)]
 pub struct VideoFrame {
     pub width: u16,
     pub height: u16,
     pub pixels: Vec<u8>,
     presentation_time: Duration,
+}
+
+impl VideoFrame {
+    pub fn from_rgb(width: u16, height: u16, pixels: Vec<u8>) -> Option<Self> {
+        let expected = width as usize * height as usize * 3;
+        if width == 0 || height == 0 || pixels.len() != expected {
+            return None;
+        }
+        Some(Self {
+            width,
+            height,
+            pixels,
+            presentation_time: Duration::ZERO,
+        })
+    }
 }
 
 pub struct VideoScreensaver {

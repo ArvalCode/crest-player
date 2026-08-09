@@ -25,7 +25,7 @@ use crossterm::{
 };
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
-use app::{App, save_library, save_settings};
+use app::{App, reset_home_wallpaper, save_home_wallpaper, save_library, save_settings};
 use player::Player;
 use lyrics::{Lyrics, fetch_lyrics_with_caption_fallback};
 use ui_with_player::ui_with_player;
@@ -302,6 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.hardware_acceleration_enabled,
             ),
             app.autoplay_enabled,
+            app.home_wallpaper.as_ref(),
             (player.title.as_deref(), player.status.as_str()),
         ))?;
         if event::poll(Duration::from_millis(50))?
@@ -309,14 +310,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match key.code {
                     KeyCode::Up => {
                         if settings_page {
-                            settings_selected = settings_selected.checked_sub(1).unwrap_or(7);
+                            settings_selected = settings_selected.checked_sub(1).unwrap_or(8);
                         } else {
                             startup_selected = startup_selected.checked_sub(1).unwrap_or(2);
                         }
                     }
                     KeyCode::Down => {
                         if settings_page {
-                            settings_selected = (settings_selected + 1) % 8;
+                            settings_selected = (settings_selected + 1) % 9;
                         } else {
                             startup_selected = (startup_selected + 1) % 3;
                         }
@@ -368,6 +369,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             7 => {
                                 app.autoplay_enabled = !app.autoplay_enabled;
+                            }
+                            8 => {
+                                if let Err(error) = reset_home_wallpaper(&mut app) {
+                                    app.error = Some(format!("Could not reset wallpaper: {error}"));
+                                }
                             }
                             _ => {}
                             }
@@ -521,6 +527,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             player.play(&path, &title);
                         }
                         video_screensaver.restart();
+                        true
+                    }
+                    Event::Key(key)
+                        if key.code == KeyCode::Char('`') && key.modifiers.is_empty() => {
+                        if let Some(frame) = video_screensaver.frame().cloned()
+                            && let Err(error) = save_home_wallpaper(&mut app, &frame)
+                        {
+                            app.error = Some(format!("Could not save wallpaper: {error}"));
+                        }
                         true
                     }
                     _ => false,

@@ -1,8 +1,9 @@
-use crate::idle_mode::VideoRenderMode;
+use crate::app::HomeWallpaper;
+use crate::idle_mode::{draw_video_frame, VideoRenderMode};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
 pub fn draw_startup_screen(
@@ -11,6 +12,7 @@ pub fn draw_startup_screen(
     lyric_settings: (bool, bool, bool),
     video_settings: (bool, VideoRenderMode, u16, bool),
     autoplay_enabled: bool,
+    home_wallpaper: Option<&HomeWallpaper>,
     playback: (Option<&str>, &str),
 ) {
     let (settings_page, selected) = page;
@@ -122,6 +124,18 @@ pub fn draw_startup_screen(
                 },
                 "Prefetch a YouTube Mix recommendation whenever your queue is empty.",
             ),
+            (
+                if home_wallpaper.is_some() {
+                    "Reset Home Wallpaper"
+                } else {
+                    "Home Wallpaper: DEFAULT"
+                },
+                if home_wallpaper.is_some() {
+                    "Remove the captured video frame and restore the Crest mascot."
+                } else {
+                    "Press ` while viewing a music video to capture a Home wallpaper."
+                },
+            ),
         ]
     } else {
         vec![
@@ -162,6 +176,69 @@ pub fn draw_startup_screen(
         }
     }
 
+    let navigation_hint = if settings_page {
+        "↑/↓ select, Enter change, Esc/Home back"
+    } else {
+        "↑/↓ select, Enter open, Q quit"
+    };
+    let hint_text = match playback.0 {
+        Some(title) => format!(
+            "Now playing: {title} [{}]  ·  {navigation_hint}",
+            playback.1
+        ),
+        None => navigation_hint.to_string(),
+    };
+
+    if !settings_page && let Some(wallpaper) = home_wallpaper {
+        let outer = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::White))
+            .title("Crest Player");
+        let inner = outer.inner(f.size());
+        f.render_widget(outer, f.size());
+        let home_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(6),
+                Constraint::Length(1),
+                Constraint::Length(option_lines.len() as u16 + 2),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        draw_video_frame(
+            f,
+            home_layout[0],
+            &wallpaper.frame,
+            wallpaper.render_mode,
+        );
+        f.render_widget(Clear, home_layout[1]);
+        f.render_widget(Clear, home_layout[2]);
+        f.render_widget(Clear, home_layout[3]);
+        f.render_widget(Clear, home_layout[4]);
+
+        let menu_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::White))
+            .title(" Menu ")
+            .style(Style::default().bg(Color::Black));
+        let menu_area = menu_block.inner(home_layout[2]);
+        f.render_widget(menu_block, home_layout[2]);
+        f.render_widget(
+            Paragraph::new(option_lines)
+                .alignment(Alignment::Center)
+                .style(Style::default().bg(Color::Black)),
+            menu_area,
+        );
+        f.render_widget(
+            Paragraph::new(hint_text)
+                .alignment(Alignment::Center)
+                .style(Style::default().bg(Color::Black)),
+            home_layout[4],
+        );
+        return;
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(if settings_page {
@@ -181,25 +258,13 @@ pub fn draw_startup_screen(
         ])
         .split(f.size());
 
-    let art_paragraph = Paragraph::new(art).alignment(Alignment::Center);
     f.render_widget(block, f.size());
+    let art_paragraph = Paragraph::new(art).alignment(Alignment::Center);
     f.render_widget(art_paragraph, layout[1]);
 
     let options_paragraph = Paragraph::new(option_lines).alignment(Alignment::Center);
     f.render_widget(options_paragraph, layout[3]);
 
-    let navigation_hint = if settings_page {
-        "↑/↓ select, Enter change, Esc/Home back"
-    } else {
-        "↑/↓ select, Enter open, Q quit"
-    };
-    let hint_text = match playback.0 {
-        Some(title) => format!(
-            "Now playing: {title} [{}]  ·  {navigation_hint}",
-            playback.1
-        ),
-        None => navigation_hint.to_string(),
-    };
     let hint = Paragraph::new(hint_text).alignment(Alignment::Center);
     f.render_widget(hint, layout[4]);
 }

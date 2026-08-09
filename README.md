@@ -53,6 +53,16 @@ image shown above. **ASCII Detailed** adds ordered dithering and a larger
 character ramp for extra texture, while **ASCII Fast** uses a shorter ramp for
 lighter-weight rendering. Synchronized lyrics remain overlaid on the video.
 
+Press `` ` `` while the video is visible to capture the current frame as the Home
+wallpaper, replacing the default Crest mascot. It fills the space inside the
+main white border above the separate, opaque menu and now-playing/navigation row
+at the bottom. The lower interface remains clean and easy to read. The captured
+frame is stored in the platform configuration directory and retains the
+rendering style that was active when it was captured. Choose **Reset Home
+Wallpaper** in Settings to delete it and restore the default mascot.
+
+![A captured music-video frame used as the ASCII wallpaper on Crest Player's Home screen](docs/home-wallpaper.png)
+
 ## Controls
 
 | Input | Action |
@@ -66,6 +76,7 @@ lighter-weight rendering. Synchronized lyrics remain overlaid on the video.
 | `Ctrl+N` | Skip to the next queued track |
 | `Alt++` / `Alt+-` | Seek forward/backward five seconds |
 | `V` | Toggle the library panel |
+| `` ` `` | Capture the visible music-video frame as the Home wallpaper |
 | `Esc` | Clear results and return to search |
 | `Home` (`Fn+Left Arrow` on compact keyboards) | Return to Home |
 | `Ctrl+Q` | Quit |
