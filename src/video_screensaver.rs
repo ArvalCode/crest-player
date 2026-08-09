@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     io::Read,
     process::{Command, Stdio},
     sync::{
@@ -11,27 +10,53 @@ use std::{
     time::{Duration, Instant},
 };
 
+const MAX_BUFFER_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BUFFER_SECONDS: usize = 2;
+
 #[derive(Clone)]
 pub struct VideoFrame {
     pub width: u16,
     pub height: u16,
-    pub pixels: Vec<u8>,
+    pub pixels: Arc<[u8]>,
     presentation_time: Duration,
+    signature: u64,
 }
 
 impl VideoFrame {
     pub fn from_rgb(width: u16, height: u16, pixels: Vec<u8>) -> Option<Self> {
+        Self::new(width, height, pixels, Duration::ZERO)
+    }
+
+    fn new(width: u16, height: u16, pixels: Vec<u8>, presentation_time: Duration) -> Option<Self> {
         let expected = width as usize * height as usize * 3;
         if width == 0 || height == 0 || pixels.len() != expected {
             return None;
         }
+        let signature = rough_frame_signature(&pixels);
         Some(Self {
             width,
             height,
-            pixels,
-            presentation_time: Duration::ZERO,
+            pixels: pixels.into(),
+            presentation_time,
+            signature,
         })
     }
+}
+
+fn rough_frame_signature(pixels: &[u8]) -> u64 {
+    pixels.chunks_exact(3).step_by(64).fold(0, |hash, pixel| {
+        hash.wrapping_mul(31)
+            .wrapping_add(u64::from(pixel[0]))
+            .wrapping_add(u64::from(pixel[1]))
+            .wrapping_add(u64::from(pixel[2]))
+    })
+}
+
+fn buffer_limit(width: u16, height: u16, fps: u16) -> usize {
+    let frame_size = width as usize * height as usize * 3;
+    let frames_by_memory = MAX_BUFFER_BYTES / frame_size.max(1);
+    let frames_by_time = fps as usize * MAX_BUFFER_SECONDS;
+    frames_by_memory.min(frames_by_time).max(1)
 }
 
 pub struct VideoScreensaver {
@@ -39,13 +64,9 @@ pub struct VideoScreensaver {
     stop: Option<Arc<AtomicBool>>,
     key: Option<(String, u16, u16, u16, bool)>,
     latest: Option<VideoFrame>,
-    buffer: VecDeque<VideoFrame>,
-    buffer_target: usize,
-    buffer_limit: usize,
-    buffering: bool,
-    frame_interval: Duration,
-    next_frame_at: Option<Instant>,
+    pending: Option<VideoFrame>,
     frame_serial: u64,
+    latest_signature: Option<u64>,
 }
 
 struct DecodePlan {
@@ -60,13 +81,9 @@ impl VideoScreensaver {
             stop: None,
             key: None,
             latest: None,
-            buffer: VecDeque::new(),
-            buffer_target: 1,
-            buffer_limit: 1,
-            buffering: true,
-            frame_interval: Duration::from_millis(66),
-            next_frame_at: None,
+            pending: None,
             frame_serial: 0,
+            latest_signature: None,
         }
     }
 
@@ -116,11 +133,30 @@ impl VideoScreensaver {
             );
         }
 
+        self.present_due_frame(position);
+    }
+
+    fn present_due_frame(&mut self, position: Duration) {
+        let mut current = None;
+        if let Some(frame) = self.pending.take() {
+            if frame.presentation_time <= position {
+                current = Some(frame);
+            } else {
+                self.pending = Some(frame);
+            }
+        }
+
         let mut disconnected = false;
-        if let Some(receiver) = &self.receiver {
-            while self.buffer.len() < self.buffer_limit {
+        if self.pending.is_none()
+            && let Some(receiver) = &self.receiver
+        {
+            loop {
                 match receiver.try_recv() {
-                    Ok(frame) => self.buffer.push_back(frame),
+                    Ok(frame) if frame.presentation_time <= position => current = Some(frame),
+                    Ok(frame) => {
+                        self.pending = Some(frame);
+                        break;
+                    }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         disconnected = true;
@@ -132,47 +168,12 @@ impl VideoScreensaver {
         if disconnected {
             self.receiver = None;
         }
-
-        if self.buffering {
-            if self.buffer.len() < self.buffer_target {
-                return;
+        if let Some(frame) = current {
+            if self.latest_signature != Some(frame.signature) {
+                self.frame_serial = self.frame_serial.wrapping_add(1);
+                self.latest_signature = Some(frame.signature);
             }
-            self.buffering = false;
-            self.next_frame_at = None;
-        }
-
-        let now = Instant::now();
-        let frames_due = match self.next_frame_at {
-            None => 1,
-            Some(deadline) if now >= deadline => {
-                1 + (now.duration_since(deadline).as_nanos() / self.frame_interval.as_nanos())
-                    as usize
-            }
-            Some(_) => 0,
-        };
-        if frames_due == 0 {
-            return;
-        }
-        let mut frames_to_take = 0;
-        while self
-            .buffer
-            .front()
-            .is_some_and(|frame| frame.presentation_time <= position)
-        {
-            self.latest = self.buffer.pop_front();
-            self.frame_serial = self.frame_serial.wrapping_add(1);
-            frames_to_take += 1;
-        }
-        if self.buffer.is_empty() && frames_to_take == 0 {
-            self.buffering = true;
-            self.next_frame_at = None;
-        } else {
-            self.next_frame_at = Some(match self.next_frame_at {
-                Some(deadline) => {
-                    deadline + self.frame_interval * u32::try_from(frames_due).unwrap_or(u32::MAX)
-                }
-                None => now + self.frame_interval,
-            });
+            self.latest = Some(frame);
         }
     }
 
@@ -200,8 +201,10 @@ impl VideoScreensaver {
             fps,
             hardware_acceleration,
         } = plan;
-        let buffer_target = fps as usize;
-        let buffer_limit = buffer_target.saturating_mul(3);
+        let frame_size = width as usize * height as usize * 3;
+        let buffer_limit = buffer_limit(width, height, fps);
+        // The bounded channel is the only frame queue. The consumer retains at
+        // most one future frame while dropping obsolete frames against audio time.
         let (sender, receiver) = mpsc::sync_channel(buffer_limit);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -246,7 +249,6 @@ impl VideoScreensaver {
             // Account for URL resolution time so video starts at the audio clock's
             // current position rather than where it was when the worker spawned.
             let synchronized_position = position + resolution_started.elapsed();
-            let frame_size = width as usize * height as usize * 3;
             let attempts: &[bool] = if hardware_acceleration {
                 &[true, false]
             } else {
@@ -292,12 +294,7 @@ impl VideoScreensaver {
                 }
                 let mut frame_index = 0u64;
                 if sender
-                    .send(VideoFrame {
-                        width,
-                        height,
-                        pixels,
-                        presentation_time: synchronized_position,
-                    })
+                    .send(VideoFrame::new(width, height, pixels, synchronized_position).unwrap())
                     .is_err()
                 {
                     let _ = child.kill();
@@ -311,13 +308,16 @@ impl VideoScreensaver {
                         break;
                     }
                     if sender
-                        .send(VideoFrame {
-                            width,
-                            height,
-                            pixels,
-                            presentation_time: synchronized_position
-                                + Duration::from_secs_f64(frame_index as f64 / f64::from(fps)),
-                        })
+                        .send(
+                            VideoFrame::new(
+                                width,
+                                height,
+                                pixels,
+                                synchronized_position
+                                    + Duration::from_secs_f64(frame_index as f64 / f64::from(fps)),
+                            )
+                            .unwrap(),
+                        )
                         .is_err()
                     {
                         break;
@@ -332,16 +332,13 @@ impl VideoScreensaver {
         self.receiver = Some(receiver);
         self.stop = Some(stop);
         self.key = Some((source, width, height, fps, hardware_acceleration));
-        self.buffer_target = buffer_target;
-        self.buffer_limit = buffer_limit;
-        self.buffering = true;
-        self.frame_interval = Duration::from_secs_f64(1.0 / f64::from(fps));
-        self.next_frame_at = None;
+        self.pending = None;
     }
 
     fn stop(&mut self) {
         self.suspend();
         self.latest = None;
+        self.latest_signature = None;
     }
 
     fn suspend(&mut self) {
@@ -350,14 +347,67 @@ impl VideoScreensaver {
         }
         self.receiver = None;
         self.key = None;
-        self.buffer.clear();
-        self.buffering = true;
-        self.next_frame_at = None;
+        self.pending = None;
     }
 }
 
 impl Drop for VideoScreensaver {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_BUFFER_BYTES, VideoFrame, buffer_limit};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    #[test]
+    fn buffer_is_capped_by_time_for_small_frames() {
+        assert_eq!(buffer_limit(100, 100, 60), 120);
+    }
+
+    #[test]
+    fn buffer_is_capped_by_memory_for_large_frames() {
+        let width = 1_000;
+        let height = 1_000;
+        let limit = buffer_limit(width, height, 60);
+        assert!(limit * width as usize * height as usize * 3 <= MAX_BUFFER_BYTES);
+    }
+
+    #[test]
+    fn cloning_a_frame_shares_pixel_storage() {
+        let frame = VideoFrame::from_rgb(1, 1, vec![1, 2, 3]).unwrap();
+        let clone = frame.clone();
+        assert!(Arc::ptr_eq(&frame.pixels, &clone.pixels));
+    }
+
+    #[test]
+    fn scheduler_drops_old_frames_and_holds_the_next_future_frame() {
+        let (sender, receiver) = mpsc::sync_channel(3);
+        for (millis, value) in [(100, 1), (200, 2), (300, 3)] {
+            sender
+                .send(
+                    VideoFrame::new(
+                        1,
+                        1,
+                        vec![value, value, value],
+                        Duration::from_millis(millis),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        let mut screensaver = super::VideoScreensaver::new();
+        screensaver.receiver = Some(receiver);
+
+        screensaver.present_due_frame(Duration::from_millis(250));
+        assert_eq!(screensaver.frame().unwrap().pixels[0], 2);
+        assert_eq!(screensaver.pending.as_ref().unwrap().pixels[0], 3);
+
+        screensaver.present_due_frame(Duration::from_millis(350));
+        assert_eq!(screensaver.frame().unwrap().pixels[0], 3);
+        assert!(screensaver.pending.is_none());
     }
 }

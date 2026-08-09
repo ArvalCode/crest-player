@@ -1,8 +1,9 @@
-use crate::idle_mode::VideoRenderMode;
+use crate::idle_mode::{ColorPrecision, VideoRenderMode};
 use crate::lyrics::LyricLine;
 use crate::wallpaper::HomeWallpaper;
 use dirs::audio_dir;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -12,6 +13,7 @@ struct PersistedSettings {
     pronunciations_enabled: bool,
     idle_video_enabled: bool,
     idle_video_render_mode: String,
+    color_precision: String,
     idle_video_fps: u16,
     hardware_acceleration_enabled: bool,
     autoplay_enabled: bool,
@@ -25,6 +27,7 @@ impl Default for PersistedSettings {
             pronunciations_enabled: true,
             idle_video_enabled: true,
             idle_video_render_mode: "ascii_fast".to_string(),
+            color_precision: "high".to_string(),
             idle_video_fps: 15,
             hardware_acceleration_enabled: false,
             autoplay_enabled: false,
@@ -39,6 +42,8 @@ pub struct App {
     pub searching: bool,
     pub error: Option<String>,
     pub library: Vec<(String, String)>,
+    library_paths: HashSet<String>,
+    available_library_paths: HashSet<String>,
     pub show_library: bool,
     pub lyrics: Vec<LyricLine>,
     pub lyrics_message: String,
@@ -50,6 +55,7 @@ pub struct App {
     pub pronunciations_enabled: bool,
     pub idle_video_enabled: bool,
     pub idle_video_render_mode: VideoRenderMode,
+    pub color_precision: ColorPrecision,
     pub idle_video_fps: u16,
     pub hardware_acceleration_enabled: bool,
     pub autoplay_enabled: bool,
@@ -59,13 +65,22 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         let settings = load_settings();
+        let library = load_library();
+        let library_paths = library.iter().map(|(_, path)| path.clone()).collect();
+        let available_library_paths = library
+            .iter()
+            .filter(|(_, path)| std::path::Path::new(path).is_file())
+            .map(|(_, path)| path.clone())
+            .collect();
         Self {
             input: String::new(),
             results: Vec::new(),
             selected: 0,
             searching: false,
             error: None,
-            library: load_library(),
+            library,
+            library_paths,
+            available_library_paths,
             show_library: false,
             lyrics: Vec::new(),
             lyrics_message: "Play a song to load lyrics.".to_string(),
@@ -81,8 +96,13 @@ impl App {
                 "color_pixels" => VideoRenderMode::ColorPixels,
                 _ => VideoRenderMode::AsciiFast,
             },
+            color_precision: match settings.color_precision.as_str() {
+                "low" => ColorPrecision::Low,
+                "medium" => ColorPrecision::Medium,
+                _ => ColorPrecision::High,
+            },
             idle_video_fps: match settings.idle_video_fps {
-                30 | 60 => settings.idle_video_fps,
+                0 | 30 | 60 => settings.idle_video_fps,
                 _ => 15,
             },
             hardware_acceleration_enabled: settings.hardware_acceleration_enabled,
@@ -90,6 +110,27 @@ impl App {
             home_wallpaper: HomeWallpaper::load(),
         }
     }
+
+    pub fn is_library_path(&self, path: &str) -> bool {
+        self.library_paths.contains(path)
+    }
+
+    pub fn is_library_file_available(&self, path: &str) -> bool {
+        self.available_library_paths.contains(path)
+    }
+
+    pub fn add_library_track(&mut self, title: String, path: String) {
+        let path = normalize_existing_path(path);
+        self.library_paths.insert(path.clone());
+        self.available_library_paths.insert(path.clone());
+        self.library.push((title, path));
+    }
+}
+
+fn normalize_existing_path(path: String) -> String {
+    std::fs::canonicalize(&path)
+        .map(|canonical| canonical.to_string_lossy().into_owned())
+        .unwrap_or(path)
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -114,6 +155,12 @@ pub fn save_settings(app: &App) {
             VideoRenderMode::AsciiFast => "ascii_fast",
             VideoRenderMode::AsciiDetailed => "ascii_detailed",
             VideoRenderMode::ColorPixels => "color_pixels",
+        }
+        .to_string(),
+        color_precision: match app.color_precision {
+            ColorPrecision::Low => "low",
+            ColorPrecision::Medium => "medium",
+            ColorPrecision::High => "high",
         }
         .to_string(),
         idle_video_fps: app.idle_video_fps,
@@ -149,7 +196,7 @@ pub fn load_library() -> Vec<(String, String)> {
                 .lines()
                 .filter_map(|l| {
                     l.split_once('|')
-                        .map(|(t, p)| (t.to_string(), p.to_string()))
+                        .map(|(t, p)| (t.to_string(), normalize_existing_path(p.to_string())))
                 })
                 .collect();
         }

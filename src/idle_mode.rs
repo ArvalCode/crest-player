@@ -48,6 +48,51 @@ impl VideoRenderMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ColorPrecision {
+    Low,
+    Medium,
+    #[default]
+    High,
+}
+
+impl ColorPrecision {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High => Self::Low,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Color Precision: LOW",
+            Self::Medium => "Color Precision: MEDIUM",
+            Self::High => "Color Precision: HIGH",
+        }
+    }
+
+    fn quantize(self, value: u8) -> u8 {
+        match self {
+            Self::Low => value & 0b1110_0000,
+            Self::Medium => value & 0b1111_0000,
+            Self::High => value,
+        }
+    }
+
+    fn apply(self, color: Color) -> Color {
+        match color {
+            Color::Rgb(red, green, blue) => Color::Rgb(
+                self.quantize(red),
+                self.quantize(green),
+                self.quantize(blue),
+            ),
+            color => color,
+        }
+    }
+}
+
 pub struct IdleMode {
     last_activity: Instant,
     stage: IdleStage,
@@ -99,15 +144,26 @@ impl IdleMode {
 /// Render a clock-driven true-color half-block scene. Each terminal cell contains
 /// two independently colored vertical pixels (foreground on top, background below).
 /// This is also the rendering contract that decoded video frames can use later.
-pub fn draw_idle_mode(
-    frame: &mut Frame,
-    stage: IdleStage,
-    title: Option<&str>,
-    position: Duration,
-    video_frame: Option<&VideoFrame>,
-    render_mode: VideoRenderMode,
-    synced_lyrics: Option<(String, Option<String>)>,
-) {
+pub struct IdleRenderState<'a> {
+    pub stage: IdleStage,
+    pub title: Option<&'a str>,
+    pub position: Duration,
+    pub video_frame: Option<&'a VideoFrame>,
+    pub render_mode: VideoRenderMode,
+    pub color_precision: ColorPrecision,
+    pub synced_lyrics: Option<(String, Option<String>)>,
+}
+
+pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
+    let IdleRenderState {
+        stage,
+        title,
+        position,
+        video_frame,
+        render_mode,
+        color_precision,
+        synced_lyrics,
+    } = state;
     let has_synced_lyrics = synced_lyrics.is_some();
     let area = frame.size();
     frame.render_widget(
@@ -139,20 +195,29 @@ pub fn draw_idle_mode(
     };
 
     let seconds = position.as_secs_f32();
+    let render_map = video_frame.map(|video| RenderMap::new(video, inner));
     let mut lines = Vec::with_capacity(inner.height as usize);
     for y in 0..inner.height {
         let mut spans = Vec::with_capacity(inner.width as usize);
         for x in 0..inner.width {
             let top = video_frame
-                .and_then(|video| video_color(video, x, y.saturating_mul(2), inner))
+                .and_then(|video| {
+                    render_map
+                        .as_ref()
+                        .and_then(|map| map.color(video, x, y.saturating_mul(2)))
+                })
                 .unwrap_or_else(|| pixel_color(x, y.saturating_mul(2), inner, seconds));
             let bottom = video_frame
                 .and_then(|video| {
-                    video_color(video, x, y.saturating_mul(2).saturating_add(1), inner)
+                    render_map
+                        .as_ref()
+                        .and_then(|map| map.color(video, x, y.saturating_mul(2).saturating_add(1)))
                 })
                 .unwrap_or_else(|| {
                     pixel_color(x, y.saturating_mul(2).saturating_add(1), inner, seconds)
                 });
+            let top = color_precision.apply(top);
+            let bottom = color_precision.apply(bottom);
             let span = match (render_mode, video_frame) {
                 (VideoRenderMode::AsciiFast, Some(_)) => ascii_span(top, bottom, x, y, false),
                 (VideoRenderMode::AsciiDetailed, Some(_)) => ascii_span(top, bottom, x, y, true),
@@ -253,14 +318,21 @@ pub fn draw_video_frame(
     area: Rect,
     video: &VideoFrame,
     render_mode: VideoRenderMode,
+    color_precision: ColorPrecision,
 ) {
+    let render_map = RenderMap::new(video, area);
     let mut lines = Vec::with_capacity(area.height as usize);
     for y in 0..area.height {
         let mut spans = Vec::with_capacity(area.width as usize);
         for x in 0..area.width {
-            let top = video_color(video, x, y.saturating_mul(2), area).unwrap_or(Color::Black);
-            let bottom = video_color(video, x, y.saturating_mul(2).saturating_add(1), area)
+            let top = render_map
+                .color(video, x, y.saturating_mul(2))
                 .unwrap_or(Color::Black);
+            let bottom = render_map
+                .color(video, x, y.saturating_mul(2).saturating_add(1))
+                .unwrap_or(Color::Black);
+            let top = color_precision.apply(top);
+            let bottom = color_precision.apply(bottom);
             spans.push(match render_mode {
                 VideoRenderMode::AsciiFast => ascii_span(top, bottom, x, y, false),
                 VideoRenderMode::AsciiDetailed => ascii_span(top, bottom, x, y, true),
@@ -298,11 +370,9 @@ fn ascii_span(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> Span
     } else {
         FAST_RAMP
     };
-    let character = ramp[luminance as usize * (ramp.len() - 1) / 255] as char;
-    Span::styled(
-        character.to_string(),
-        Style::default().fg(color).bg(Color::Black),
-    )
+    let index = luminance as usize * (ramp.len() - 1) / 255;
+    let symbol = std::str::from_utf8(&ramp[index..index + 1]).unwrap_or(" ");
+    Span::styled(symbol, Style::default().fg(color).bg(Color::Black))
 }
 
 fn luminance(color: Color) -> u8 {
@@ -313,30 +383,34 @@ fn luminance(color: Color) -> u8 {
     luminance as u8
 }
 
-fn video_color(frame: &VideoFrame, x: u16, y: u16, area: Rect) -> Option<Color> {
-    video_color_scaled(frame, x, y, area.width, area.height.saturating_mul(2))
+struct RenderMap {
+    x: Vec<usize>,
+    y: Vec<usize>,
 }
 
-fn video_color_scaled(
-    frame: &VideoFrame,
-    x: u16,
-    y: u16,
-    target_width: u16,
-    target_height: u16,
-) -> Option<Color> {
-    if frame.width == 0 || frame.height == 0 || target_width == 0 || target_height == 0 {
-        return None;
+impl RenderMap {
+    fn new(frame: &VideoFrame, area: Rect) -> Self {
+        let target_width = area.width as usize;
+        let target_height = area.height.saturating_mul(2) as usize;
+        let x = (0..target_width)
+            .map(|value| value * frame.width as usize / target_width.max(1))
+            .collect();
+        let y = (0..target_height)
+            .map(|value| value * frame.height as usize / target_height.max(1))
+            .collect();
+        Self { x, y }
     }
-    let source_x =
-        (x as usize * frame.width as usize / target_width as usize).min(frame.width as usize - 1);
-    let source_y = (y as usize * frame.height as usize / target_height as usize)
-        .min(frame.height as usize - 1);
-    let index = (source_y * frame.width as usize + source_x) * 3;
-    Some(Color::Rgb(
-        *frame.pixels.get(index)?,
-        *frame.pixels.get(index + 1)?,
-        *frame.pixels.get(index + 2)?,
-    ))
+
+    fn color(&self, frame: &VideoFrame, x: u16, y: u16) -> Option<Color> {
+        let source_x = *self.x.get(x as usize)?;
+        let source_y = *self.y.get(y as usize)?;
+        let index = (source_y * frame.width as usize + source_x) * 3;
+        Some(Color::Rgb(
+            *frame.pixels.get(index)?,
+            *frame.pixels.get(index + 1)?,
+            *frame.pixels.get(index + 2)?,
+        ))
+    }
 }
 
 fn inset(area: Rect, margin: u16) -> Rect {
@@ -365,7 +439,8 @@ fn pixel_color(x: u16, y: u16, area: Rect, time: f32) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::VideoRenderMode;
+    use super::{ColorPrecision, VideoRenderMode};
+    use ratatui::style::Color;
 
     #[test]
     fn cycles_through_all_video_render_modes() {
@@ -379,5 +454,16 @@ mod tests {
     fn render_modes_request_half_block_resolution() {
         assert_eq!(VideoRenderMode::AsciiDetailed.samples_per_cell(), (1, 2));
         assert_eq!(VideoRenderMode::ColorPixels.samples_per_cell(), (1, 2));
+    }
+
+    #[test]
+    fn color_precision_quantizes_rgb_channels() {
+        let color = Color::Rgb(255, 127, 31);
+        assert_eq!(ColorPrecision::High.apply(color), color);
+        assert_eq!(
+            ColorPrecision::Medium.apply(color),
+            Color::Rgb(240, 112, 16)
+        );
+        assert_eq!(ColorPrecision::Low.apply(color), Color::Rgb(224, 96, 0));
     }
 }

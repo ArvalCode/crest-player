@@ -27,7 +27,10 @@ ASCII music-video display when left idle.
   - **Ambient** after 15 seconds.
   - **Cinema** after 30 seconds.
 - Render video as fast color ASCII, detailed dithered ASCII, or ANSI true-color half-block pixels.
-- Decode and present video at a selectable steady 15, 30, or 60 FPS, synchronized to the audio clock.
+- Select low, medium, or high color precision. Lower precision reduces terminal
+  color changes and output bandwidth; high precision preserves the full RGB frame.
+- Decode and present video at a fixed 15, 30, or 60 FPS, or select **AUTO** to
+  adapt presentation speed to terminal performance while staying on the audio clock.
 - Optionally try FFmpeg hardware video decoding from Settings, with automatic
   software fallback when acceleration is unavailable.
 - Prebuffer decoded video frames in memory to absorb network/decode stalls, discard
@@ -51,7 +54,9 @@ resolution, and the brightness of each sample is mapped to a character in an
 ASCII ramp. The sampled video color is retained, producing the colored ASCII
 image shown above. **ASCII Detailed** adds ordered dithering and a larger
 character ramp for extra texture, while **ASCII Fast** uses a shorter ramp for
-lighter-weight rendering. Synchronized lyrics remain overlaid on the video.
+lighter-weight rendering. The **Color Precision** setting cycles between Low,
+Medium, and High to balance terminal performance against color fidelity.
+Synchronized lyrics remain overlaid on the video.
 
 Press `` ` `` while the video is visible to capture the current frame as the Home
 wallpaper, replacing the default Crest mascot. It fills the space inside the
@@ -62,6 +67,15 @@ rendering style that was active when it was captured. Choose **Reset Home
 Wallpaper** in Settings to delete it and restore the default mascot.
 
 ![A captured music-video frame used as the ASCII wallpaper on Crest Player's Home screen](docs/home-wallpaper.png)
+
+## Video Playback Disclaimer
+
+Terminal rendering can become a bottleneck during TUI video playback and may
+cause the displayed frame rate to fluctuate or stutter, even when audio remains
+synchronized. Performance depends on terminal dimensions, rendering style,
+color precision, configured FPS, and the terminal emulator itself. A
+GPU-accelerated terminal such as [Kitty](https://sw.kovidgoyal.net/kitty/) is
+recommended when a smoother playback experience is needed.
 
 ## Controls
 

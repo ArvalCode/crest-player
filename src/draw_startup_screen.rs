@@ -1,4 +1,4 @@
-use crate::idle_mode::{VideoRenderMode, draw_video_frame};
+use crate::idle_mode::{ColorPrecision, VideoRenderMode, draw_video_frame};
 use crate::wallpaper::HomeWallpaper;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub const HOME_OPTION_COUNT: usize = 3;
-pub const SETTINGS_OPTION_COUNT: usize = 9;
+pub const SETTINGS_OPTION_COUNT: usize = 10;
 pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
@@ -14,15 +14,20 @@ pub fn draw_startup_screen(
     f: &mut ratatui::Frame,
     page: (bool, usize),
     lyric_settings: (bool, bool, bool),
-    video_settings: (bool, VideoRenderMode, u16, bool),
+    video_settings: (bool, VideoRenderMode, ColorPrecision, u16, bool),
     autoplay_enabled: bool,
     home_wallpaper: Option<&HomeWallpaper>,
     playback: (Option<&str>, &str),
 ) {
     let (settings_page, selected) = page;
     let (lyrics_enabled, live_sync_enabled, pronunciations_enabled) = lyric_settings;
-    let (idle_video_enabled, idle_video_render_mode, idle_video_fps, hardware_acceleration_enabled) =
-        video_settings;
+    let (
+        idle_video_enabled,
+        idle_video_render_mode,
+        color_precision,
+        idle_video_fps,
+        hardware_acceleration_enabled,
+    ) = video_settings;
     // Flamingo C ASCII art (red)
     let flamingo = vec![
         r"                                            *******,           /#,",
@@ -105,12 +110,17 @@ pub fn draw_startup_screen(
                 "Cycle fast ASCII, detailed dithered ASCII, and color pixels.",
             ),
             (
+                color_precision.label(),
+                "Cycle low, medium, and high RGB precision. Lower precision reduces terminal output.",
+            ),
+            (
                 match idle_video_fps {
+                    0 => "Video FPS: AUTO",
                     30 => "Video FPS: 30",
                     60 => "Video FPS: 60",
                     _ => "Video FPS: 15",
                 },
-                "Cycle the music-video rendering frame rate between 15, 30, and 60 FPS.",
+                "Cycle between adaptive AUTO mode and fixed 15, 30, or 60 FPS.",
             ),
             (
                 if hardware_acceleration_enabled {
@@ -251,7 +261,13 @@ fn draw_wallpaper_home(
             Constraint::Length(1),
         ])
         .split(inner);
-    draw_video_frame(frame, layout[0], &wallpaper.frame, wallpaper.render_mode);
+    draw_video_frame(
+        frame,
+        layout[0],
+        &wallpaper.frame,
+        wallpaper.render_mode,
+        wallpaper.color_precision,
+    );
     for area in [layout[1], layout[2], layout[3], layout[4]] {
         frame.render_widget(Clear, area);
     }

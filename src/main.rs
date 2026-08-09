@@ -35,7 +35,7 @@ use draw_startup_screen::{
 };
 use search::{search_youtube, download_audio};
 use recommendations::{Recommendation, youtube_mix_recommendation};
-use idle_mode::{draw_idle_mode, IdleMode};
+use idle_mode::{draw_idle_mode, IdleMode, IdleRenderState};
 use video_screensaver::VideoScreensaver;
 use wallpaper::HomeWallpaper;
 
@@ -43,6 +43,7 @@ struct FramePacer {
     fps: u16,
     configured_fps: u16,
     fast_frames: u16,
+    average_render_micros: f64,
 }
 
 impl FramePacer {
@@ -51,41 +52,78 @@ impl FramePacer {
             fps: 60,
             configured_fps: 60,
             fast_frames: 0,
+            average_render_micros: 0.0,
         }
     }
 
     fn target(&mut self, configured: u16) -> u16 {
         if self.configured_fps != configured {
             self.configured_fps = configured;
-            self.fps = configured;
+            self.fps = if configured == 0 { 30 } else { configured };
             self.fast_frames = 0;
+            self.average_render_micros = 0.0;
         }
-        self.fps = self.fps.min(configured).max(15);
+        if configured != 0 {
+            self.fps = configured;
+        }
         self.fps
     }
 
     fn record(&mut self, render_time: Duration, configured: u16) {
-        let budget = Duration::from_micros(1_000_000 / u64::from(self.fps));
-        if render_time >= budget.mul_f32(0.85) {
-            self.fps = match self.fps {
-                60 => 30,
-                30 => 15,
-                value => value,
-            };
+        if configured != 0 {
+            return;
+        }
+        const FPS_LEVELS: &[u16] = &[15, 20, 24, 30, 45, 60];
+        let elapsed = render_time.as_secs_f64() * 1_000_000.0;
+        self.average_render_micros = if self.average_render_micros == 0.0 {
+            elapsed
+        } else {
+            self.average_render_micros * 0.9 + elapsed * 0.1
+        };
+        let budget_micros = 1_000_000.0 / f64::from(self.fps);
+        if self.average_render_micros >= budget_micros * 0.9 {
+            self.fps = FPS_LEVELS
+                .iter()
+                .copied()
+                .rev()
+                .find(|level| *level < self.fps)
+                .unwrap_or(15);
             self.fast_frames = 0;
-        } else if render_time <= budget.mul_f32(0.45) {
+        } else if self.average_render_micros <= budget_micros * 0.5 {
             self.fast_frames = self.fast_frames.saturating_add(1);
             if self.fast_frames >= 120 {
-                self.fps = match self.fps {
-                    15 if configured >= 30 => 30,
-                    30 if configured >= 60 => 60,
-                    value => value,
-                };
+                self.fps = FPS_LEVELS
+                    .iter()
+                    .copied()
+                    .find(|level| *level > self.fps)
+                    .unwrap_or(self.fps);
                 self.fast_frames = 0;
             }
         } else {
             self.fast_frames = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_pacer_tests {
+    use super::FramePacer;
+    use std::time::Duration;
+
+    #[test]
+    fn fixed_fps_never_adapts() {
+        let mut pacer = FramePacer::new();
+        assert_eq!(pacer.target(60), 60);
+        pacer.record(Duration::from_millis(100), 60);
+        assert_eq!(pacer.target(60), 60);
+    }
+
+    #[test]
+    fn auto_fps_reduces_an_unsustainable_rate() {
+        let mut pacer = FramePacer::new();
+        assert_eq!(pacer.target(0), 30);
+        pacer.record(Duration::from_millis(40), 0);
+        assert_eq!(pacer.target(0), 24);
     }
 }
 
@@ -302,6 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (
                 app.idle_video_enabled,
                 app.idle_video_render_mode,
+                app.color_precision,
                 app.idle_video_fps,
                 app.hardware_acceleration_enabled,
             ),
@@ -364,18 +403,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.idle_video_render_mode = app.idle_video_render_mode.next();
                             }
                             5 => {
+                                app.color_precision = app.color_precision.next();
+                            }
+                            6 => {
                                 app.idle_video_fps = match app.idle_video_fps {
                                     15 => 30,
                                     30 => 60,
+                                    60 => 0,
                                     _ => 15,
                                 };
                             }
-                            6 => {
+                            7 => {
                                 app.hardware_acceleration_enabled =
                                     !app.hardware_acceleration_enabled;
                                 video_screensaver.restart();
                             }
-                            7 => {
+                            8 => {
                                 app.autoplay_enabled = !app.autoplay_enabled;
                             }
                             RESET_WALLPAPER_SETTING => {
@@ -433,7 +476,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             screen.width,
             screen.height,
             (
-                app.idle_video_fps,
+                if app.idle_video_fps == 0 {
+                    60
+                } else {
+                    app.idle_video_fps
+                },
                 app.idle_video_render_mode.samples_per_cell(),
                 player.status == "Playing",
                 app.hardware_acceleration_enabled,
@@ -444,12 +491,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if idle_mode.is_visible() {
                 draw_synchronized(&mut terminal, |f| draw_idle_mode(
                     f,
-                    idle_mode.stage(),
-                    player.title.as_deref(),
-                    player.position(),
-                    video_screensaver.frame(),
-                    app.idle_video_render_mode,
-                    if app.lyrics_enabled
+                    IdleRenderState {
+                        stage: idle_mode.stage(),
+                        title: player.title.as_deref(),
+                        position: player.position(),
+                        video_frame: video_screensaver.frame(),
+                        render_mode: app.idle_video_render_mode,
+                        color_precision: app.color_precision,
+                        synced_lyrics: if app.lyrics_enabled
                         && app.live_sync_enabled
                         && app.lyrics_synced
                         && !app.lyrics.is_empty()
@@ -472,6 +521,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         })
                     } else {
                         None
+                    },
                     },
                 ))?;
             } else if downloaded_only_mode {
@@ -546,6 +596,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let wallpaper = HomeWallpaper::capture(
                                 &frame,
                                 app.idle_video_render_mode,
+                                app.color_precision,
                             );
                             if let Err(error) = wallpaper.save() {
                                 app.error = Some(format!("Could not save wallpaper: {error}"));
@@ -798,7 +849,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let (title, id) = &app.results[app.selected];
                             let url = format!("https://www.youtube.com/watch?v={}", id);
                             if let Some(path) = download_audio(&url, title) {
-                                app.library.push((title.clone(), path.to_str().unwrap().to_string()));
+                                app.add_library_track(
+                                    title.clone(),
+                                    path.to_string_lossy().into_owned(),
+                                );
                                 save_library(&app.library);
                                 needs_redraw = true;
                             }
