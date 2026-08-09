@@ -41,6 +41,18 @@ ASCII music-video display when left idle.
 - Optionally prefetch a related YouTube Mix track when the queue is empty with
   **Autoplay**. Manually queued tracks always take priority.
 
+## ASCII Music-Video Playback
+
+![A music video rendered as colored ASCII characters in Crest Player](docs/video-playback-ascii.png)
+
+While a track is playing, Crest Player can turn its YouTube music video into a
+terminal-native visualizer. Each decoded frame is sampled at the terminal's
+resolution, and the brightness of each sample is mapped to a character in an
+ASCII ramp. The sampled video color is retained, producing the colored ASCII
+image shown above. **ASCII Detailed** adds ordered dithering and a larger
+character ramp for extra texture, while **ASCII Fast** uses a shorter ramp for
+lighter-weight rendering. Synchronized lyrics remain overlaid on the video.
+
 ## Controls
 
 | Input | Action |
