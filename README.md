@@ -6,110 +6,62 @@ ASCII music-video display when left idle.
 
 ## Features
 
-- Search YouTube and queue tracks without blocking the terminal interface.
-- Share one continuous playback queue between streaming and downloaded-only modes.
-- Keep audio and queue advancement running on Home without showing the video overlay.
-- Keep all configuration on a dedicated Settings page and persist changes between
-  launches in the platform user configuration directory.
-  On Linux this is normally `~/.config/crest-player/settings.json`.
-- Stream audio through `yt-dlp` and `ffplay` or play a downloaded-only library.
-- Download and save favorite tracks locally.
-- Permanently remove selected downloaded songs from the library with `Delete`.
-- Display synchronized lyrics with optional Japanese romaji.
-- Fall back to timed manual or automatic YouTube video captions when the lyrics
-  service has no result.
-- Show available Latin-letter pronunciation lines alongside original lyrics with
-  the default-on **English Pronunciations** Home setting.
-- Overlay the current synchronized lyric and a preview of the next line throughout
-  Ambient and Cinema without resizing the video area.
-- Seek, pause, resume, and skip queued tracks.
-- Enter a staged YouTube music-video screensaver while music is playing:
-  - **Ambient** after 5 seconds.
-  - **Cinema** after 8 seconds.
-- Render video as fast color ASCII, detailed dithered ASCII, or ANSI true-color half-block pixels.
-- Select low, medium, or high color precision. Lower precision reduces terminal
-  color changes and output bandwidth; high precision preserves the full RGB frame.
-- Decode and present video at a fixed 15, 30, or 60 FPS, or select **AUTO** to
-  adapt presentation speed to terminal performance while staying on the audio clock.
-- Optionally try FFmpeg hardware video decoding from Settings, with automatic
-  software fallback when acceleration is unavailable.
-- Prebuffer decoded video frames in memory to absorb network/decode stalls, discard
-  late frames, and release the buffer immediately when the screensaver ends.
-- Skip missed presentation deadlines instead of issuing burst catch-up renders.
-- Download a temporary video-only cache in parallel with streamed audio, prewarm
-  decoded frames before the overlay appears, and delete cached media after use.
-- Disable the YouTube screensaver, select its rendering style, or change its FPS from Home.
-- Wake on keyboard input, mouse clicks, or scrolling. Mouse movement alone is ignored.
-- Fall back to a procedural terminal animation while video loads or is unavailable.
-- Optionally prefetch a related YouTube Mix track when the queue is empty with
-  **Autoplay**. Manually queued tracks always take priority.
+- Search and progressively stream YouTube audio without blocking the interface.
+- Play, download, queue, and delete tracks from a local music library.
+- Share one queue across streaming and downloaded-only modes.
+- Show synchronized lyrics, YouTube-caption fallback, and optional Japanese romaji.
+- Overlay current and upcoming lyrics during Ambient and Cinema playback.
+- Render music videos as fast ASCII, detailed dithered ASCII, or true-color pixels.
+- Choose 15, 24, 30, or 60 FPS, or adaptive **AUTO** mode.
+- Predecode ten seconds of video, retain ten seconds of history, and drop late frames.
+- Use optional hardware decoding with automatic software fallback.
+- Save compact `.crestvid` caches with embedded lyrics for downloaded tracks.
+- Capture a video frame as the Home wallpaper.
+- Optionally prefetch YouTube Mix recommendations when the queue is empty.
+- Persist settings in the platform configuration directory; on Linux this is
+  normally `~/.config/crest-player/settings.json`.
 
 ## ASCII Music-Video Playback
 
 ![A music video rendered as colored ASCII characters in Crest Player](docs/video-playback-ascii.png)
 
-While a track is playing, Crest Player can turn its YouTube music video into a
-terminal-native visualizer. Each decoded frame is sampled at the terminal's
-resolution, and the brightness of each sample is mapped to a character in an
-ASCII ramp. The sampled video color is retained, producing the colored ASCII
-image shown above. **ASCII Detailed** adds ordered dithering and a larger
-character ramp for extra texture, while **ASCII Fast** uses a shorter ramp for
-lighter-weight rendering. The **Color Precision** setting cycles between Low,
-Medium, and High to balance terminal performance against color fidelity.
-Synchronized lyrics remain overlaid on the video.
+Video frames are sampled at terminal resolution and mapped to a colored ASCII
+ramp. **ASCII Detailed** adds dithering and texture; **ASCII Fast** favors speed.
+Color Precision balances terminal bandwidth against fidelity. Synchronized
+lyrics remain overlaid.
 
-Use `Ctrl+Shift++` or `Ctrl+Shift+-` in supported terminal emulators to increase
-or decrease the terminal font size. A smaller font provides Crest Player with
-more rows and columns, increasing the apparent resolution and detail of the
-ASCII video; a larger font produces a coarser image that may render faster.
-These shortcuts are controlled by the terminal emulator and may vary if its key
-bindings have been customized.
+Adjust terminal font size to trade speed for detail: smaller text increases video
+resolution; larger text renders faster. Common shortcuts are `Ctrl+Shift++` and
+`Ctrl+Shift+-`, though terminal bindings vary.
 
-Press `` ` `` while the video is visible to capture the current frame as the Home
-wallpaper, replacing the default Crest mascot. It fills the space inside the
-main white border above the separate, opaque menu and now-playing/navigation row
-at the bottom. The lower interface remains clean and easy to read. The captured
-frame is stored in the platform configuration directory and retains the
-rendering style that was active when it was captured. Choose **Reset Home
-Wallpaper** in Settings to delete it and restore the default mascot.
+Press `` ` `` during video playback to capture the frame as the Home wallpaper.
+Use **Reset Home Wallpaper** in Settings to restore the default mascot.
 
 ![A captured music-video frame used as the ASCII wallpaper on Crest Player's Home screen](docs/home-wallpaper.png)
 
 ## Video Playback Disclaimer
 
-Terminal rendering can become a bottleneck during TUI video playback and may
-cause the displayed frame rate to fluctuate or stutter, even when audio remains
-synchronized. Performance depends on terminal dimensions, rendering style,
-color precision, configured FPS, and the terminal emulator itself. A
-GPU-accelerated terminal such as [Kitty](https://sw.kovidgoyal.net/kitty/) is
-recommended when a smoother playback experience is needed.
+Terminal dimensions, render mode, color precision, FPS, and emulator performance
+all affect smoothness. Audio stays synchronized when late video frames are
+dropped. A GPU-accelerated terminal such as [Kitty](https://sw.kovidgoyal.net/kitty/)
+is recommended.
 
 ## Performance Benchmark
 
-The following playback benchmark was recorded on an **Intel Core Ultra 9 386H**
-system with 16 logical CPUs. Crest Player was compiled in release mode and run
-in an 80×24 terminal using ASCII Fast, High color precision,
-60 FPS, hardware acceleration enabled, and autoplay enabled. Each result is the
-average of 30 one-second steady-state samples. The measurements include Crest
-Player and its `ffplay`, `ffmpeg`, and `yt-dlp` child processes.
-
-In this table, 100% CPU means one fully occupied logical CPU. The total-capacity
-columns normalize the measurements across all 16 logical CPUs.
+Measured on an **Intel Core Ultra 9 386H** with 16 logical CPUs using a release
+build, 80×24 terminal, ASCII Fast, High color precision, 60 FPS, hardware
+acceleration, and autoplay. Results average 30 one-second samples and include all
+media child processes. Here, 100% equals one fully occupied logical CPU.
 
 | Playback mode | Crest Player | `ffplay` | `ffmpeg` | `yt-dlp` | Combined average | Combined peak | Average total capacity | Peak total capacity |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Downloaded MP3 + 8.6 MB `.crestvid` | 2.57% | 0.65% | 11.51% | 0.00% | **14.73%** | 22.10% | **0.92%** | 1.38% |
 | Streamed song + live video | 1.36% | 2.76% | 46.89% | 7.90% | **58.90%** | 346.50% | **3.68%** | 21.66% |
 
-The downloaded test played **Liza – PARALLEL feat. 7** from the local library
-with its `.crestvid` cache. The streamed test played **Daft Punk – One More
-Time** using progressive audio and live video processing. Streamed playback used
-about four times the average CPU of cached playback, primarily because FFmpeg
-decoded and scaled the remote video while `yt-dlp` handled URL resolution and
-autoplay prefetching. The high streamed peak was a short multi-core startup and
-prebuffering burst rather than sustained utilization. GPU utilization was not
-measured, and results will vary with terminal size, FPS, render mode, network,
-FFmpeg build, and terminal emulator.
+Downloaded playback used **Liza – PARALLEL feat. 7** and its cache; streaming used
+**Daft Punk – One More Time**. Streaming averaged about 4× more CPU. Its peak was
+a brief resolution/prebuffering burst. GPU usage was not measured; results vary
+by terminal, network, settings, and FFmpeg build.
 
 ## Controls
 
@@ -131,8 +83,7 @@ FFmpeg build, and terminal emulator.
 
 ### Downloaded-library commands
 
-In **Downloaded Music Only** mode, type commands into the command bar and press
-`Enter` to run them:
+Enter these in **Downloaded Music Only** mode:
 
 | Command | Action |
 | --- | --- |
@@ -140,128 +91,79 @@ In **Downloaded Music Only** mode, type commands into the command bar and press
 | `:shuffle all` | Add every downloaded library song to the queue, then randomize it |
 | `:clear` | Empty the playback queue without stopping the current song |
 
-Command names and arguments are separated by spaces. `Esc` clears the command
-bar without running it.
-
-While the screensaver is visible, the first intentional input restores the normal
-interface and is consumed so it cannot accidentally activate a control. Playback
-shortcuts (`Ctrl+P`, `Ctrl+N`, `Alt++`, and `Alt+-`) operate without leaving the
-Ambient or Cinema view.
+`Esc` clears the command bar. The first input wakes the screensaver and is
+consumed; playback shortcuts continue to work in Ambient and Cinema.
 
 ## Getting Started
-1. Ensure you have Rust and Cargo installed.
-2. Install required system dependencies:
-   - yt-dlp (YouTube downloader)
-   - ffmpeg (audio/video processing)
 
-   On Arch Linux:
-   ```sh
-   sudo pacman -S yt-dlp ffmpeg
-   ```
-   On Ubuntu/Debian:
-   ```sh
-   sudo apt update
-   sudo apt install yt-dlp ffmpeg
-   ```
+Install Rust, Cargo, `yt-dlp`, and FFmpeg (`ffplay` must be included).
 
-3. Build the project:
-   ```sh
-   cargo build --release
-   ```
-4. Install the application system-wide (optional, for running from anywhere):
-   ```sh
-   sudo cp target/release/crest-player /usr/local/bin/crest-player
-   ```
+Arch Linux:
 
-5. Run the application:
-   ```sh
-   crest-player
-   ```
+```sh
+sudo pacman -S yt-dlp ffmpeg
+```
+
+Ubuntu/Debian:
+
+```sh
+sudo apt update
+sudo apt install yt-dlp ffmpeg
+```
+
+Build and run:
+
+```sh
+cargo build --release
+./target/release/crest-player
+```
+
+Optional system-wide install:
+
+```sh
+sudo cp target/release/crest-player /usr/local/bin/crest-player
+```
 
 ## Windows (PowerShell)
 
-These steps build and run Crest Player natively on Windows 10 or 11.
+Install Microsoft C++ Build Tools with **Desktop development with C++**, then
+install Rust, Git, `yt-dlp`, and FFmpeg. With WinGet:
 
-1. Install the Microsoft C++ Build Tools with the **Desktop development with
-   C++** workload, then install Rust through `rustup`. Rust's Windows toolchain
-   requires the MSVC build tools. See the official [Rust installation guide](https://rust-lang.org/tools/install/)
-   and [Microsoft's Rust setup guide](https://learn.microsoft.com/windows/dev-environment/rust/setup).
+```powershell
+winget install --id Rustlang.Rustup --exact
+winget install --id Git.Git --exact
+winget install yt-dlp
+winget install --id Gyan.FFmpeg --exact
+```
 
-   If WinGet is available, install `rustup` from PowerShell:
+Restart PowerShell so the tools are on `PATH`, then build:
 
-   ```powershell
-   winget install --id Rustlang.Rustup --exact
-   winget install --id Git.Git --exact
-   ```
+```powershell
+git clone https://github.com/ArvalCode/crest-player.git
+Set-Location crest-player
+cargo build --release
+.\target\release\crest-player.exe
+```
 
-2. Install `yt-dlp` and FFmpeg. Crest Player calls `yt-dlp`, `ffmpeg`, and
-   `ffplay` by name, so all three executables must be available on `PATH`.
-
-   ```powershell
-   winget install yt-dlp
-   winget install --id Gyan.FFmpeg --exact
-   ```
-
-   The `yt-dlp` project documents WinGet as a supported Windows installation
-   method in its [installation guide](https://github.com/yt-dlp/yt-dlp/wiki/Installation).
-   Close and reopen PowerShell after installing packages so `PATH` changes take
-   effect.
-
-3. Verify the required commands:
-
-   ```powershell
-   git --version
-   cargo --version
-   yt-dlp --version
-   ffmpeg -version
-   ffplay -version
-   ```
-
-4. Clone, build, and run Crest Player:
-
-   ```powershell
-   git clone https://github.com/ArvalCode/crest-player.git
-   Set-Location crest-player
-   cargo build --release
-   .\target\release\crest-player.exe
-   ```
-
-   Windows Terminal is recommended for the best ANSI true-color and Unicode
-   rendering. Increase the terminal window size if the wallpaper or video looks
-   cramped.
+Windows Terminal is recommended for ANSI color and Unicode rendering.
 
 ### Windows data locations
 
 - Settings: `%APPDATA%\crest-player\settings.json`
 - Captured Home wallpaper: `%APPDATA%\crest-player\home-wallpaper.rgb`
 - Downloaded library and its index: the current user's Music folder
-- Temporary streamed audio and video: the current user's temporary directory
 
 ### Current Windows limitation
 
-Native Windows playback, searching, downloading, video rendering, seeking, and
-skipping are supported. Pause/resume with `Ctrl+P` currently relies on Unix
-process signals, so that shortcut does not suspend `ffplay` correctly in a
-native Windows session. Running Crest Player inside WSL with Linux audio support
-uses the Linux behavior.
+Native Windows supports playback, search, downloads, video, seeking, and skipping.
+`Ctrl+P` pause/resume relies on Unix signals and does not currently suspend
+`ffplay` natively; WSL uses the Linux behavior.
 
 ## Uninstalling
 
-To completely remove Crest Player from your system:
-
-1. Remove the installed binary:
-   ```sh
-   sudo rm /usr/local/bin/crest-player
-   ```
-2. (Optional) Remove the build directory and source code if you no longer need them:
-   ```sh
-   rm -rf /home/arval/Documents/VSProjects/crest-player
-   ```
-
-On Windows, remove the cloned repository (and any copied
-`crest-player.exe`). To reset application data as well, remove
-`%APPDATA%\crest-player`; downloaded songs remain in the user's Music folder
-unless removed separately.
+Remove the installed binary and cloned repository. On Windows, also remove any
+copied executable. Settings live in the platform configuration directory;
+downloaded songs remain in the Music folder unless deleted separately.
 
 ## License
 MIT
