@@ -1,4 +1,5 @@
 //
+use crate::video_cache::build_video_cache;
 use dirs::audio_dir;
 use std::path::PathBuf;
 use std::process::Command;
@@ -36,7 +37,11 @@ pub fn search_youtube(query: &str) -> Result<Vec<(String, String)>, String> {
     Ok(songs)
 }
 
-pub fn download_audio(url: &str, title: &str) -> Option<PathBuf> {
+pub fn download_audio(
+    url: &str,
+    title: &str,
+    video_cache_plan: Option<(u16, u16, u16)>,
+) -> Option<PathBuf> {
     let dir = audio_dir().unwrap_or_else(|| PathBuf::from("."));
     let filename = format!("{}_ytmusic.mp3", title.replace('/', "_"));
     let path = dir.join(filename);
@@ -57,6 +62,34 @@ pub fn download_audio(url: &str, title: &str) -> Option<PathBuf> {
         .output()
         .expect("Failed to run yt-dlp");
     if output.status.success() {
+        if let Some((width, height, fps)) = video_cache_plan {
+            let video_path = path.with_extension("video.cache");
+            let cache_path = path.with_extension("crestvid");
+            let video_downloaded = Command::new("yt-dlp")
+                .args([
+                    "--no-playlist",
+                    "-f",
+                    "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
+                    "-o",
+                    video_path.to_str().unwrap_or_default(),
+                    url,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if video_downloaded {
+                let _ = build_video_cache(
+                    video_path.to_str().unwrap_or_default(),
+                    cache_path.to_str().unwrap_or_default(),
+                    width,
+                    height,
+                    fps,
+                );
+            }
+            let _ = std::fs::remove_file(video_path);
+        }
         Some(path)
     } else {
         eprintln!("yt-dlp failed: {}", String::from_utf8_lossy(&output.stderr));

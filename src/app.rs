@@ -132,6 +132,12 @@ impl App {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
+        let video_cache = std::path::Path::new(path).with_extension("crestvid");
+        match std::fs::remove_file(video_cache) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         self.library
             .retain(|(_, library_path)| library_path != path);
         self.library_paths.remove(path);

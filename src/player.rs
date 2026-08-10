@@ -127,6 +127,14 @@ impl Player {
                 .and_then(|path| self.video_files.get(path))
                 .cloned()
                 .or_else(|| {
+                    self.current_path.as_ref().and_then(|path| {
+                        let cache = std::path::Path::new(path).with_extension("crestvid");
+                        cache
+                            .is_file()
+                            .then(|| cache.to_string_lossy().into_owned())
+                    })
+                })
+                .or_else(|| {
                     self.current_path
                         .as_ref()
                         .and_then(|path| self.video_sources.get(path))

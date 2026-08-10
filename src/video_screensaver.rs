@@ -1,3 +1,4 @@
+use crate::video_cache::VideoCache;
 use std::{
     collections::VecDeque,
     io::Read,
@@ -275,6 +276,31 @@ impl VideoScreensaver {
         let worker_stop = Arc::clone(&stop);
         let worker_source = source.clone();
         thread::spawn(move || {
+            if let Ok(mut cache) = VideoCache::open(&worker_source) {
+                let cache_fps = cache.fps.max(1);
+                let cache_width = cache.width;
+                let cache_height = cache.height;
+                let first_frame = (position.as_secs_f64() * f64::from(cache_fps)) as usize;
+                for frame_index in first_frame..cache.frame_count() {
+                    if worker_stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let Ok(pixels) = cache.read_frame(frame_index) else {
+                        return;
+                    };
+                    let presentation_time =
+                        Duration::from_secs_f64(frame_index as f64 / f64::from(cache_fps));
+                    let Some(frame) =
+                        VideoFrame::new(cache_width, cache_height, pixels, presentation_time)
+                    else {
+                        return;
+                    };
+                    if sender.send(frame).is_err() {
+                        return;
+                    }
+                }
+                return;
+            }
             let resolution_started = Instant::now();
             let direct_url = if std::path::Path::new(&worker_source).is_file() {
                 worker_source.clone()

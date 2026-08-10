@@ -10,6 +10,7 @@ mod search;
 mod recommendations;
 mod idle_mode;
 mod video_screensaver;
+mod video_cache;
 mod wallpaper;
 
 
@@ -39,6 +40,7 @@ use search::{search_youtube, download_audio};
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use idle_mode::{draw_idle_mode, IdleMode, IdleRenderState};
 use video_screensaver::VideoScreensaver;
+use video_cache::build_video_cache;
 use wallpaper::HomeWallpaper;
 
 struct FramePacer {
@@ -141,7 +143,7 @@ fn queue_youtube_download(
     player: &mut Player,
     sender: &std::sync::mpsc::Sender<DownloadFinished>,
     video_sender: &std::sync::mpsc::Sender<VideoPrefetchFinished>,
-    prefetch_video: bool,
+    video_cache_plan: Option<(u16, u16, u16)>,
     title: &str,
     video_id: &str,
 ) {
@@ -162,7 +164,7 @@ fn queue_youtube_download(
         .queue
         .push((format!("{title} (Downloading...)"), path_string.clone()));
 
-    let video_prefetch = prefetch_video.then(|| {
+    let video_prefetch = video_cache_plan.map(|(width, height, fps)| {
         (
             video_sender.clone(),
             path_string.clone(),
@@ -171,6 +173,9 @@ fn queue_youtube_download(
                 .to_string_lossy()
                 .into_owned(),
             url.clone(),
+            width,
+            height,
+            fps,
         )
     });
 
@@ -213,7 +218,7 @@ fn queue_youtube_download(
         // media streams ready and avoids a second network/post-processing spike
         // at the playback boundary. A failed video prefetch still allows audio.
         if success
-            && let Some((video_sender, audio_path, video_path, video_url)) = video_prefetch
+            && let Some((video_sender, audio_path, video_path, video_url, width, height, fps)) = video_prefetch
         {
             let video_success = Command::new("yt-dlp")
                 .args([
@@ -230,10 +235,19 @@ fn queue_youtube_download(
                 .status()
                 .map(|status| status.success())
                 .unwrap_or(false);
+            let cache_path = format!("{video_path}.crestvid");
+            let cache_success = video_success
+                && build_video_cache(&video_path, &cache_path, width, height, fps).is_ok();
+            // The source is retained until the cache builder has consumed and
+            // atomically finalized it, then removed regardless of outcome.
+            let _ = std::fs::remove_file(&video_path);
+            if !cache_success {
+                let _ = std::fs::remove_file(&cache_path);
+            }
             if let Err(error) = video_sender.send(VideoPrefetchFinished {
                 audio_path,
-                video_path,
-                success: video_success,
+                video_path: cache_path,
+                success: cache_success,
             }) {
                 let _ = std::fs::remove_file(error.0.video_path);
             }
@@ -815,7 +829,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut player,
                         &download_tx,
                         &video_prefetch_tx,
-                        app.idle_video_enabled,
+                        app.idle_video_enabled.then(|| {
+                            let samples = app.idle_video_render_mode.samples_per_cell();
+                            (
+                                screen.width.saturating_mul(samples.0),
+                                screen.height.saturating_mul(samples.1),
+                                if app.idle_video_fps == 0 { 60 } else { app.idle_video_fps },
+                            )
+                        }),
                         title,
                         id,
                     );
@@ -865,7 +886,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !app.results.is_empty() {
                             let (title, id) = &app.results[app.selected];
                             let url = format!("https://www.youtube.com/watch?v={}", id);
-                            if let Some(path) = download_audio(&url, title) {
+                            let video_cache_plan = app.idle_video_enabled.then(|| {
+                                let samples = app.idle_video_render_mode.samples_per_cell();
+                                (
+                                    screen.width.saturating_mul(samples.0),
+                                    screen.height.saturating_mul(samples.1),
+                                    if app.idle_video_fps == 0 { 60 } else { app.idle_video_fps },
+                                )
+                            });
+                            if let Some(path) = download_audio(&url, title, video_cache_plan) {
                                 app.add_library_track(
                                     title.clone(),
                                     path.to_string_lossy().into_owned(),
@@ -946,7 +975,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut player,
                     &download_tx,
                     &video_prefetch_tx,
-                    app.idle_video_enabled,
+                    app.idle_video_enabled.then(|| {
+                        let samples = app.idle_video_render_mode.samples_per_cell();
+                        (
+                            screen.width.saturating_mul(samples.0),
+                            screen.height.saturating_mul(samples.1),
+                            if app.idle_video_fps == 0 { 60 } else { app.idle_video_fps },
+                        )
+                    }),
                     &recommendation.title,
                     &recommendation.video_id,
                 );
