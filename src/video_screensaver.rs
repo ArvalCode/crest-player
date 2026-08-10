@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::Read,
     process::{Command, Stdio},
     sync::{
@@ -11,7 +12,9 @@ use std::{
 };
 
 const MAX_BUFFER_BYTES: usize = 32 * 1024 * 1024;
-const MAX_BUFFER_SECONDS: usize = 2;
+const MAX_BUFFER_SECONDS: usize = 8;
+const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HISTORY_SECONDS: u64 = 8;
 
 #[derive(Clone)]
 pub struct VideoFrame {
@@ -65,6 +68,8 @@ pub struct VideoScreensaver {
     key: Option<(String, u16, u16, u16, bool)>,
     latest: Option<VideoFrame>,
     pending: Option<VideoFrame>,
+    history: VecDeque<VideoFrame>,
+    history_bytes: usize,
     frame_serial: u64,
     latest_signature: Option<u64>,
 }
@@ -82,6 +87,8 @@ impl VideoScreensaver {
             key: None,
             latest: None,
             pending: None,
+            history: VecDeque::new(),
+            history_bytes: 0,
             frame_serial: 0,
             latest_signature: None,
         }
@@ -120,7 +127,10 @@ impl VideoScreensaver {
             hardware_acceleration,
         );
         if self.key.as_ref() != Some(&key) {
-            self.stop();
+            // Preserve the last completed frame while a replacement decoder
+            // starts. Clearing it here exposes the animated blue fallback after
+            // seeks, resizes, and decoder-setting changes.
+            self.suspend();
             self.start(
                 source,
                 position,
@@ -173,7 +183,29 @@ impl VideoScreensaver {
                 self.frame_serial = self.frame_serial.wrapping_add(1);
                 self.latest_signature = Some(frame.signature);
             }
-            self.latest = Some(frame);
+            if let Some(previous) = self.latest.replace(frame) {
+                self.history_bytes = self.history_bytes.saturating_add(previous.pixels.len());
+                self.history.push_back(previous);
+                self.trim_history();
+            }
+        }
+    }
+
+    fn trim_history(&mut self) {
+        let newest_time = self
+            .history
+            .back()
+            .map(|frame| frame.presentation_time)
+            .unwrap_or_default();
+        while self.history_bytes > MAX_HISTORY_BYTES
+            || self.history.front().is_some_and(|frame| {
+                newest_time.saturating_sub(frame.presentation_time)
+                    > Duration::from_secs(MAX_HISTORY_SECONDS)
+            })
+        {
+            if let Some(frame) = self.history.pop_front() {
+                self.history_bytes = self.history_bytes.saturating_sub(frame.pixels.len());
+            }
         }
     }
 
@@ -187,6 +219,39 @@ impl VideoScreensaver {
 
     pub fn restart(&mut self) {
         self.stop();
+    }
+
+    /// Move immediately to a buffered frame near the new audio position. Forward
+    /// seeks consume decoder look-ahead; backward seeks use recently displayed
+    /// history. Decoding restarts only when the target is outside those windows.
+    pub fn seek_to(&mut self, position: Duration) {
+        let current_time = self
+            .latest
+            .as_ref()
+            .map(|frame| frame.presentation_time)
+            .unwrap_or_default();
+        if position >= current_time {
+            self.present_due_frame(position);
+            let reached_target = self.latest.as_ref().is_some_and(|frame| {
+                position.saturating_sub(frame.presentation_time) <= Duration::from_millis(250)
+            });
+            if !reached_target {
+                self.suspend();
+            }
+            return;
+        }
+
+        if let Some(index) = self
+            .history
+            .iter()
+            .rposition(|frame| frame.presentation_time <= position)
+            && let Some(frame) = self.history.get(index).cloned()
+        {
+            self.latest_signature = Some(frame.signature);
+            self.latest = Some(frame);
+            self.frame_serial = self.frame_serial.wrapping_add(1);
+        }
+        self.suspend();
     }
 
     fn start(
@@ -339,6 +404,8 @@ impl VideoScreensaver {
         self.suspend();
         self.latest = None;
         self.latest_signature = None;
+        self.history.clear();
+        self.history_bytes = 0;
     }
 
     fn suspend(&mut self) {
@@ -365,7 +432,7 @@ mod tests {
 
     #[test]
     fn buffer_is_capped_by_time_for_small_frames() {
-        assert_eq!(buffer_limit(100, 100, 60), 120);
+        assert_eq!(buffer_limit(100, 100, 60), 480);
     }
 
     #[test]
@@ -409,5 +476,31 @@ mod tests {
         screensaver.present_due_frame(Duration::from_millis(350));
         assert_eq!(screensaver.frame().unwrap().pixels[0], 3);
         assert!(screensaver.pending.is_none());
+    }
+
+    #[test]
+    fn seek_keeps_the_last_frame_until_replacement_is_ready() {
+        let mut screensaver = super::VideoScreensaver::new();
+        screensaver.latest = VideoFrame::from_rgb(1, 1, vec![10, 20, 30]);
+
+        screensaver.seek_to(Duration::from_secs(5));
+
+        assert_eq!(screensaver.frame().unwrap().pixels.as_ref(), &[10, 20, 30]);
+        assert!(screensaver.receiver.is_none());
+        assert!(screensaver.key.is_none());
+    }
+
+    #[test]
+    fn backward_seek_uses_a_recent_frame_immediately() {
+        let mut screensaver = super::VideoScreensaver::new();
+        screensaver
+            .history
+            .push_back(VideoFrame::new(1, 1, vec![1, 2, 3], Duration::from_secs(5)).unwrap());
+        screensaver.latest =
+            Some(VideoFrame::new(1, 1, vec![9, 9, 9], Duration::from_secs(10)).unwrap());
+
+        screensaver.seek_to(Duration::from_secs(5));
+
+        assert_eq!(screensaver.frame().unwrap().pixels.as_ref(), &[1, 2, 3]);
     }
 }

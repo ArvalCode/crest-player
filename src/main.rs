@@ -208,16 +208,10 @@ fn queue_youtube_download(
             })
             .filter(|title| !title.trim().is_empty())
             .unwrap_or(title);
-        let _ = sender.send(DownloadFinished {
-            title,
-            path: path_string,
-            autoplay,
-            success,
-        });
-
-        // Audio is the critical path for queue advancement. Fetch the optional
-        // video only after notifying the player that its audio is ready, rather
-        // than making both downloads compete for bandwidth and extractor work.
+        // When video playback is enabled, finish its prefetch attempt before
+        // marking the track playable. This lets queued tracks start with both
+        // media streams ready and avoids a second network/post-processing spike
+        // at the playback boundary. A failed video prefetch still allows audio.
         if success
             && let Some((video_sender, audio_path, video_path, video_url)) = video_prefetch
         {
@@ -244,6 +238,13 @@ fn queue_youtube_download(
                 let _ = std::fs::remove_file(error.0.video_path);
             }
         }
+
+        let _ = sender.send(DownloadFinished {
+            title,
+            path: path_string,
+            autoplay,
+            success,
+        });
     });
 }
 
@@ -560,14 +561,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if matches!(key.code, KeyCode::Char('+') | KeyCode::Char('='))
                             && key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
                         player.seek_by(5);
-                        video_screensaver.restart();
+                        video_screensaver.seek_to(player.position());
                         true
                     }
                     Event::Key(key)
                         if key.code == KeyCode::Char('-')
                             && key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
                         player.seek_by(-5);
-                        video_screensaver.restart();
+                        video_screensaver.seek_to(player.position());
                         true
                     }
                     Event::Key(key)
@@ -659,9 +660,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                             player.seek_by(5);
+                            video_screensaver.seek_to(player.position());
                         },
                         (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                             player.seek_by(-5);
+                            video_screensaver.seek_to(player.position());
                         },
                         (KeyCode::Down, m) if m.is_empty() => {
                             if !app.results.is_empty() {
@@ -758,9 +761,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     (KeyCode::Char('+') | KeyCode::Char('='), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                         player.seek_by(5);
+                        video_screensaver.seek_to(player.position());
                     },
                     (KeyCode::Char('-'), m) if m.contains(crossterm::event::KeyModifiers::ALT) => {
                         player.seek_by(-5);
+                        video_screensaver.seek_to(player.position());
                     },
                     // Special case: if user types exactly :library, show library in results
                     (KeyCode::Char(c), m) if m.is_empty() => {
