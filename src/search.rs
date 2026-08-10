@@ -60,7 +60,7 @@ pub fn download_audio(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
-        .expect("Failed to run yt-dlp");
+        .ok()?;
     if output.status.success() {
         if let Some((width, height, fps)) = video_cache_plan {
             let video_path = path.with_extension("video.cache");

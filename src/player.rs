@@ -13,7 +13,6 @@ pub struct Player {
     current_path: Option<String>,
     last_finished_title: Option<String>,
     video_sources: HashMap<String, String>,
-    video_files: HashMap<String, String>,
 }
 
 impl Player {
@@ -29,7 +28,6 @@ impl Player {
             current_path: None,
             last_finished_title: None,
             video_sources: HashMap::new(),
-            video_files: HashMap::new(),
         }
     }
 
@@ -47,17 +45,13 @@ impl Player {
             if last.contains("ytmusic_play_") && last.ends_with(".mp3") {
                 let _ = fs::remove_file(&last);
                 self.video_sources.remove(&last);
-                self.remove_video_file(&last);
             }
         }
         self.stop();
         // A streaming download creates its output file before it has finished.
         // Do not treat that partial file as playable until the completion event
         // replaces the temporary queue label with the resolved title.
-        if title.ends_with(" (Downloading...)")
-            && path.contains("ytmusic_play_")
-            && path.ends_with(".mp3")
-        {
+        if title.ends_with(" (Downloading...)") {
             self.status = "Downloading...".to_string();
             self.title = Some(title.trim_end_matches(" (Downloading...)").to_string());
             self.current_path = Some(path.to_string());
@@ -66,7 +60,9 @@ impl Player {
         }
         // If path is a local file and exists, play directly
         // If path is in the library, use the actual file path
-        let play_path = if Path::new(path).exists()
+        let play_path = if path.starts_with("http://") || path.starts_with("https://") {
+            path.to_string()
+        } else if Path::new(path).exists()
             && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false)
         {
             path.to_string()
@@ -124,15 +120,11 @@ impl Player {
         Some(
             self.current_path
                 .as_ref()
-                .and_then(|path| self.video_files.get(path))
-                .cloned()
-                .or_else(|| {
-                    self.current_path.as_ref().and_then(|path| {
-                        let cache = std::path::Path::new(path).with_extension("crestvid");
-                        cache
-                            .is_file()
-                            .then(|| cache.to_string_lossy().into_owned())
-                    })
+                .and_then(|path| {
+                    let cache = std::path::Path::new(path).with_extension("crestvid");
+                    cache
+                        .is_file()
+                        .then(|| cache.to_string_lossy().into_owned())
                 })
                 .or_else(|| {
                     self.current_path
@@ -144,35 +136,14 @@ impl Player {
         )
     }
 
-    pub fn register_video_file(&mut self, audio_path: &str, video_path: String) {
-        let relevant = self.current_path.as_deref() == Some(audio_path)
-            || self.last_temp_file.as_deref() == Some(audio_path)
-            || self.queue.iter().any(|(_, path)| path == audio_path);
-        if relevant {
-            if let Some(old) = self.video_files.insert(audio_path.to_string(), video_path) {
-                let _ = std::fs::remove_file(old);
-            }
-        } else {
-            let _ = std::fs::remove_file(video_path);
-        }
-    }
-
-    fn remove_video_file(&mut self, audio_path: &str) {
-        if let Some(path) = self.video_files.remove(audio_path) {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-
     pub fn cleanup_temp_media(&mut self) {
         if let Some(audio_path) = self.last_temp_file.take() {
             let _ = std::fs::remove_file(&audio_path);
-            self.remove_video_file(&audio_path);
             self.video_sources.remove(&audio_path);
         }
         for (_, path) in self.queue.clone() {
             if path.contains("ytmusic_play_") {
                 let _ = std::fs::remove_file(&path);
-                self.remove_video_file(&path);
                 self.video_sources.remove(&path);
             }
         }
@@ -276,7 +247,6 @@ impl Player {
                     {
                         let _ = fs::remove_file(&last);
                         self.video_sources.remove(&last);
-                        self.remove_video_file(&last);
                     }
                     self.advance_queue()
                 }

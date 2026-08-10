@@ -6,7 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub const HOME_OPTION_COUNT: usize = 3;
-pub const SETTINGS_OPTION_COUNT: usize = 10;
+pub const SETTINGS_OPTION_COUNT: usize = 11;
+pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
 pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
@@ -16,6 +17,7 @@ pub fn draw_startup_screen(
     lyric_settings: (bool, bool, bool),
     video_settings: (bool, VideoRenderMode, ColorPrecision, u16, bool),
     autoplay_enabled: bool,
+    library_track_count: usize,
     home_wallpaper: Option<&HomeWallpaper>,
     playback: (Option<&str>, &str),
 ) {
@@ -137,6 +139,14 @@ pub fn draw_startup_screen(
                     "Autoplay: OFF"
                 },
                 "Prefetch a YouTube Mix recommendation whenever your queue is empty.",
+            ),
+            (
+                "Delete All Known Songs/Videos",
+                if library_track_count == 0 {
+                    "No downloaded library media is currently tracked by Crest Player."
+                } else {
+                    "Delete every song and cached video recorded in Crest Player's library index."
+                },
             ),
             (
                 if home_wallpaper.is_some() {

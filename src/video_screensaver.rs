@@ -13,9 +13,9 @@ use std::{
 };
 
 const MAX_BUFFER_BYTES: usize = 32 * 1024 * 1024;
-const MAX_BUFFER_SECONDS: usize = 8;
-const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
-const MAX_HISTORY_SECONDS: u64 = 8;
+const MAX_BUFFER_SECONDS: usize = 10;
+const MAX_HISTORY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_HISTORY_SECONDS: u64 = 10;
 
 #[derive(Clone)]
 pub struct VideoFrame {
@@ -275,7 +275,9 @@ impl VideoScreensaver {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker_source = source.clone();
-        thread::spawn(move || {
+        let _ = thread::Builder::new()
+            .name("crest-video-decode".to_string())
+            .spawn(move || {
             if let Ok(mut cache) = VideoCache::open(&worker_source) {
                 let cache_fps = cache.fps.max(1);
                 let cache_width = cache.width;
@@ -348,7 +350,21 @@ impl VideoScreensaver {
             for &accelerated in attempts {
                 let seek = format!("{:.3}", synchronized_position.as_secs_f64());
                 let mut command = Command::new("ffmpeg");
-                command.args(["-loglevel", "error", "-ss", &seek]);
+                command.args([
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    // Two decoder/filter threads are enough for terminal-sized
+                    // video while avoiding an unbounded CPU spike during prewarm.
+                    "-threads",
+                    "2",
+                    "-filter_threads",
+                    "2",
+                    "-sws_flags",
+                    "fast_bilinear",
+                    "-ss",
+                    &seek,
+                ]);
                 if accelerated {
                     command.args(["-hwaccel", "auto"]);
                 }
@@ -419,7 +435,7 @@ impl VideoScreensaver {
                 let _ = child.wait();
                 return;
             }
-        });
+            });
         self.receiver = Some(receiver);
         self.stop = Some(stop);
         self.key = Some((source, width, height, fps, hardware_acceleration));
@@ -458,7 +474,7 @@ mod tests {
 
     #[test]
     fn buffer_is_capped_by_time_for_small_frames() {
-        assert_eq!(buffer_limit(100, 100, 60), 480);
+        assert_eq!(buffer_limit(100, 100, 60), 600);
     }
 
     #[test]

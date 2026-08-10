@@ -5,6 +5,19 @@ use dirs::audio_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DownloadState {
+    Downloading,
+    Finished,
+    Failed,
+}
+
+pub struct DownloadJob {
+    pub path: String,
+    pub title: String,
+    pub state: DownloadState,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct PersistedSettings {
@@ -59,6 +72,7 @@ pub struct App {
     pub idle_video_fps: u16,
     pub hardware_acceleration_enabled: bool,
     pub autoplay_enabled: bool,
+    pub downloads: Vec<DownloadJob>,
     pub home_wallpaper: Option<HomeWallpaper>,
 }
 
@@ -107,6 +121,7 @@ impl App {
             },
             hardware_acceleration_enabled: settings.hardware_acceleration_enabled,
             autoplay_enabled: settings.autoplay_enabled,
+            downloads: Vec::new(),
             home_wallpaper: HomeWallpaper::load(),
         }
     }
@@ -143,6 +158,43 @@ impl App {
         self.library_paths.remove(path);
         self.available_library_paths.remove(path);
         Ok(())
+    }
+
+    pub fn start_download(&mut self, path: String, title: String) {
+        self.downloads.push(DownloadJob {
+            path,
+            title,
+            state: DownloadState::Downloading,
+        });
+    }
+
+    pub fn finish_download(&mut self, path: &str, title: String, success: bool) {
+        if let Some(job) = self.downloads.iter_mut().find(|job| job.path == path) {
+            job.title = title;
+            job.state = if success {
+                DownloadState::Finished
+            } else {
+                DownloadState::Failed
+            };
+        }
+    }
+
+    pub fn has_active_downloads(&self) -> bool {
+        self.downloads
+            .iter()
+            .any(|job| job.state == DownloadState::Downloading)
+    }
+
+    /// Remove only files explicitly recorded in Crest Player's library index.
+    pub fn delete_all_library_media(&mut self) -> Vec<String> {
+        let paths: Vec<String> = self.library.iter().map(|(_, path)| path.clone()).collect();
+        let mut errors = Vec::new();
+        for path in paths {
+            if let Err(error) = self.remove_library_track(&path) {
+                errors.push(format!("{}: {error}", path));
+            }
+        }
+        errors
     }
 }
 

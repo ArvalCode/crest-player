@@ -135,7 +135,7 @@ impl IdleMode {
     }
 
     pub fn should_preload_video(&self, playback_active: bool) -> bool {
-        playback_active && self.last_activity.elapsed() >= Duration::from_secs(4)
+        playback_active
     }
 }
 

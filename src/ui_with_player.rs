@@ -1,3 +1,4 @@
+use crate::download_queue_ui::render_download_queue;
 use crate::{App, Player};
 use ratatui::{
     Frame,
@@ -186,7 +187,16 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     let right_list = List::new(right_items)
         .block(Block::default().borders(Borders::ALL).title(right_title))
         .highlight_style(Style::default().bg(Color::Green).fg(Color::Black));
-    f.render_widget(right_list, main_chunks[1]);
+    if !app.has_active_downloads() {
+        f.render_widget(right_list, main_chunks[1]);
+    } else {
+        let right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_chunks[1]);
+        f.render_widget(right_list, right_chunks[0]);
+        render_download_queue(f, right_chunks[1], app);
+    }
 
     if app.lyrics_enabled {
         let lyric_lines: Vec<ratatui::text::Line> = if app.lyrics.is_empty() {
