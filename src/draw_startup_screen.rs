@@ -118,6 +118,7 @@ pub fn draw_startup_screen(
             (
                 match idle_video_fps {
                     0 => "Video FPS: AUTO",
+                    24 => "Video FPS: 24",
                     30 => "Video FPS: 30",
                     60 => "Video FPS: 60",
                     _ => "Video FPS: 15",
@@ -201,7 +202,7 @@ pub fn draw_startup_screen(
     }
 
     let navigation_hint = if settings_page {
-        "↑/↓ select, Enter change, Esc/Home back"
+        "↑/↓ select, Enter change, Esc/Ctrl+← back"
     } else {
         "↑/↓ select, Enter open, Q quit"
     };

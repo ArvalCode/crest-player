@@ -78,7 +78,7 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     state.select(Some(app.selected));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(
-            "Downloaded Songs (arrows, Enter play/queue, Delete remove, Ctrl+n next, Home return, Ctrl+q quit)"
+            "Downloaded Songs (arrows, Enter play/queue, Delete remove, Ctrl+n next, Ctrl+← home, Ctrl+q quit)"
         ))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, vchunks[1], &mut state);
@@ -88,7 +88,7 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     } else if app.results.is_empty() {
         "No downloaded songs found."
     } else {
-        "Arrows navigate, Enter plays or queues, Delete removes, Ctrl+n skips, Home returns, Ctrl+q quits."
+        "Arrows navigate, Enter plays or queues, Delete removes, Ctrl+n skips, Ctrl+← returns home, Ctrl+q quits."
     };
     let help = Paragraph::new(help).block(Block::default().borders(Borders::ALL));
     f.render_widget(help, vchunks[2]);
@@ -96,12 +96,12 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     // Player bar
     let player_text = if let Some(title) = &player.title {
         format!(
-            "▶ {} [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Home returns)",
+            "▶ {} [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Ctrl+← home)",
             title, player.status
         )
     } else {
         format!(
-            "▶ [No song playing] [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Home returns)",
+            "▶ [No song playing] [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Ctrl+← home)",
             player.status
         )
     };

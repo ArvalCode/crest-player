@@ -84,15 +84,15 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     state.select(Some(app.selected));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(
-            "Results (arrows, Enter play/queue, Ctrl+l like, v library, Esc search, Home return, Ctrl+q quit)"
+            "Results (arrows, Enter play/queue, Ctrl+l like, v library, Esc search, Ctrl+← home, Ctrl+q quit)"
         ))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, vchunks[1], &mut state);
 
     let help = if app.results.is_empty() {
-        "Type your search, Backspace edits, and Enter searches. Home returns to the menu. Ctrl+q quits."
+        "Type your search, Backspace edits, and Enter searches. Ctrl+← returns home. Ctrl+q quits."
     } else {
-        "Arrows navigate, Enter plays or queues, Ctrl+l likes, Esc searches again, Home returns to the menu."
+        "Arrows navigate, Enter plays or queues, Ctrl+l likes, Esc searches again, Ctrl+← returns home."
     };
     let help = if let Some(err) = &app.error {
         err.as_str()
@@ -105,12 +105,12 @@ pub fn ui_with_player(f: &mut Frame, app: &App, player: &Player) {
     // Player bar
     let player_text = if let Some(title) = &player.title {
         format!(
-            "▶ {} [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Home returns)",
+            "▶ {} [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Ctrl+← home)",
             title, player.status
         )
     } else {
         format!(
-            "▶ [No song playing] [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Home returns)",
+            "▶ [No song playing] [{}] (Alt+± seek 5s, Ctrl+p pause, Ctrl+n next, Ctrl+← home)",
             player.status
         )
     };

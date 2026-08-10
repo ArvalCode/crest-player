@@ -72,7 +72,7 @@ fn build_video_cache_inner(
     lyrics_synced: Option<bool>,
 ) -> io::Result<()> {
     let filter = format!(
-        "fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+        "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
     );
     let keyframe_interval = u32::from(fps) * 10;
     let keyframe_interval = keyframe_interval.to_string();
@@ -80,7 +80,18 @@ fn build_video_cache_inner(
     // keep seeking bounded while the screensaver decodes ahead into its frame
     // ring before presentation. At 700 kbps, a four-minute cache is about 21 MB.
     let mut command = Command::new("ffmpeg");
-    command.args(["-y", "-loglevel", "error", "-i", video_path]);
+    command.args([
+        "-y",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-fflags",
+        "+genpts+discardcorrupt",
+        "-thread_queue_size",
+        "256",
+        "-i",
+        video_path,
+    ]);
     if let Some(lyrics_path) = lyrics_path {
         command.args(["-i", lyrics_path]);
     }
@@ -93,9 +104,11 @@ fn build_video_cache_inner(
         "-c:v",
         "libx264",
         "-preset",
-        "medium",
+        "slow",
         "-tune",
         "fastdecode",
+        "-threads",
+        "0",
         "-b:v",
         "700k",
         "-maxrate",
@@ -110,6 +123,8 @@ fn build_video_cache_inner(
         "0",
         "-bf",
         "0",
+        "-force_key_frames",
+        "expr:gte(t,n_forced*10)",
     ]);
     if lyrics_path.is_some() {
         let synced = if lyrics_synced == Some(true) {

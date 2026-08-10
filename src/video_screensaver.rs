@@ -12,9 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAX_BUFFER_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 const MAX_BUFFER_SECONDS: usize = 10;
-const MAX_HISTORY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HISTORY_SECONDS: u64 = 10;
 
 #[derive(Clone)]
@@ -117,7 +117,7 @@ impl VideoScreensaver {
         let pixel_width = width.saturating_mul(samples_per_cell.0);
         let pixel_height = cell_height.saturating_mul(samples_per_cell.1);
         let fps = match fps {
-            30 | 60 => fps,
+            15 | 24 | 30 | 60 => fps,
             _ => 15,
         };
         let key = (
@@ -337,7 +337,7 @@ impl VideoScreensaver {
             }
 
             let filter = format!(
-                "fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+                "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
             );
             // Account for URL resolution time so video starts at the audio clock's
             // current position rather than where it was when the worker spawned.
@@ -354,14 +354,20 @@ impl VideoScreensaver {
                     "-nostdin",
                     "-loglevel",
                     "error",
-                    // Two decoder/filter threads are enough for terminal-sized
-                    // video while avoiding an unbounded CPU spike during prewarm.
+                    // Let FFmpeg use its automatically selected worker count so
+                    // decode-ahead can fill the frame ring as quickly as possible.
                     "-threads",
-                    "2",
+                    "0",
                     "-filter_threads",
-                    "2",
+                    "0",
+                    "-fflags",
+                    "+genpts+discardcorrupt",
+                    "-flags",
+                    "+low_delay",
+                    "-thread_queue_size",
+                    "256",
                     "-sws_flags",
-                    "fast_bilinear",
+                    "lanczos",
                     "-ss",
                     &seek,
                 ]);
@@ -372,6 +378,8 @@ impl VideoScreensaver {
                     "-i",
                     &direct_url,
                     "-an",
+                    "-sn",
+                    "-dn",
                     "-vf",
                     &filter,
                     "-pix_fmt",

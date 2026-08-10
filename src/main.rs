@@ -274,7 +274,7 @@ fn video_cache_plan(app: &App, width: u16, height: u16) -> Option<(u16, u16, u16
             width.saturating_mul(samples.0),
             height.saturating_mul(samples.1),
             if app.idle_video_fps == 0 {
-                60
+                30
             } else {
                 app.idle_video_fps
             },
@@ -436,7 +436,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 6 => {
                                     app.idle_video_fps = match app.idle_video_fps {
-                                        15 => 30,
+                                        15 => 24,
+                                        24 => 30,
                                         30 => 60,
                                         60 => 0,
                                         _ => 15,
@@ -480,7 +481,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             save_settings(&app);
                         }
                     }
-                    KeyCode::Esc | KeyCode::Home if settings_page => {
+                    KeyCode::Esc if settings_page => {
+                        settings_page = false;
+                    }
+                    KeyCode::Left
+                        if settings_page
+                            && key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    {
                         settings_page = false;
                     }
                     KeyCode::Char('q') => {
@@ -524,7 +533,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 screen.height,
                 (
                     if app.idle_video_fps == 0 {
-                        60
+                        30
                     } else {
                         app.idle_video_fps
                     },
@@ -691,7 +700,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if downloaded_only_mode {
                         // Only allow navigation and playback in the downloaded songs list (results panel)
                         match (key.code, key.modifiers) {
-                            (KeyCode::Home, m) if m.is_empty() => {
+                            (KeyCode::Left, m)
+                                if m.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                            {
                                 idle_mode.note_activity();
                                 video_screensaver.restart();
                                 continue 'home;
@@ -807,7 +818,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     match (key.code, key.modifiers) {
-                        (KeyCode::Home, m) if m.is_empty() => {
+                        (KeyCode::Left, m)
+                            if m.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
                             idle_mode.note_activity();
                             video_screensaver.restart();
                             continue 'home;

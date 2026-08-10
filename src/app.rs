@@ -116,7 +116,7 @@ impl App {
                 _ => ColorPrecision::High,
             },
             idle_video_fps: match settings.idle_video_fps {
-                0 | 30 | 60 => settings.idle_video_fps,
+                0 | 15 | 24 | 30 | 60 => settings.idle_video_fps,
                 _ => 15,
             },
             hardware_acceleration_enabled: settings.hardware_acceleration_enabled,

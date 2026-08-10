@@ -84,6 +84,33 @@ color precision, configured FPS, and the terminal emulator itself. A
 GPU-accelerated terminal such as [Kitty](https://sw.kovidgoyal.net/kitty/) is
 recommended when a smoother playback experience is needed.
 
+## Performance Benchmark
+
+The following playback benchmark was recorded on an **Intel Core Ultra 9 386H**
+system with 16 logical CPUs. Crest Player was compiled in release mode and run
+in an 80×24 terminal using ASCII Fast, High color precision,
+60 FPS, hardware acceleration enabled, and autoplay enabled. Each result is the
+average of 30 one-second steady-state samples. The measurements include Crest
+Player and its `ffplay`, `ffmpeg`, and `yt-dlp` child processes.
+
+In this table, 100% CPU means one fully occupied logical CPU. The total-capacity
+columns normalize the measurements across all 16 logical CPUs.
+
+| Playback mode | Crest Player | `ffplay` | `ffmpeg` | `yt-dlp` | Combined average | Combined peak | Average total capacity | Peak total capacity |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Downloaded MP3 + 8.6 MB `.crestvid` | 2.57% | 0.65% | 11.51% | 0.00% | **14.73%** | 22.10% | **0.92%** | 1.38% |
+| Streamed song + live video | 1.36% | 2.76% | 46.89% | 7.90% | **58.90%** | 346.50% | **3.68%** | 21.66% |
+
+The downloaded test played **Liza – PARALLEL feat. 7** from the local library
+with its `.crestvid` cache. The streamed test played **Daft Punk – One More
+Time** using progressive audio and live video processing. Streamed playback used
+about four times the average CPU of cached playback, primarily because FFmpeg
+decoded and scaled the remote video while `yt-dlp` handled URL resolution and
+autoplay prefetching. The high streamed peak was a short multi-core startup and
+prebuffering burst rather than sustained utilization. GPU utilization was not
+measured, and results will vary with terminal size, FPS, render mode, network,
+FFmpeg build, and terminal emulator.
+
 ## Controls
 
 | Input | Action |
@@ -99,7 +126,7 @@ recommended when a smoother playback experience is needed.
 | `V` | Toggle the library panel |
 | `` ` `` | Capture the visible music-video frame as the Home wallpaper |
 | `Esc` | Clear results and return to search |
-| `Home` (`Fn+Left Arrow` on compact keyboards) | Return to Home |
+| `Ctrl+Left Arrow` | Return to Home |
 | `Ctrl+Q` | Quit |
 
 ### Downloaded-library commands
