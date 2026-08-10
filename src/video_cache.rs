@@ -1,3 +1,4 @@
+use crate::lyrics::Lyrics;
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
@@ -29,6 +30,7 @@ pub fn build_video_cache(
     width: u16,
     height: u16,
     fps: u16,
+    lyrics: Option<&Lyrics>,
 ) -> io::Result<()> {
     if width == 0 || height == 0 || fps == 0 {
         return Err(io::Error::new(
@@ -37,8 +39,21 @@ pub fn build_video_cache(
         ));
     }
     let temporary_path = format!("{cache_path}.part");
-    let result =
-        build_video_cache_inner(video_path, cache_path, &temporary_path, width, height, fps);
+    let lyrics_path = format!("{temporary_path}.lyrics.vtt");
+    if let Some(lyrics) = lyrics {
+        std::fs::write(&lyrics_path, lyrics_as_webvtt(lyrics))?;
+    }
+    let result = build_video_cache_inner(
+        video_path,
+        cache_path,
+        &temporary_path,
+        width,
+        height,
+        fps,
+        lyrics.map(|_| lyrics_path.as_str()),
+        lyrics.map(|lyrics| lyrics.synced),
+    );
+    let _ = std::fs::remove_file(&lyrics_path);
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary_path);
         let _ = std::fs::remove_file(cache_path);
@@ -53,6 +68,8 @@ fn build_video_cache_inner(
     width: u16,
     height: u16,
     fps: u16,
+    lyrics_path: Option<&str>,
+    lyrics_synced: Option<bool>,
 ) -> io::Result<()> {
     let filter = format!(
         "fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
@@ -62,42 +79,57 @@ fn build_video_cache_inner(
     // V3 caches use a conventional inter-frame codec on disk. Ten-second GOPs
     // keep seeking bounded while the screensaver decodes ahead into its frame
     // ring before presentation. At 700 kbps, a four-minute cache is about 21 MB.
-    let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-i",
-            video_path,
-            "-an",
-            "-vf",
-            &filter,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-tune",
-            "fastdecode",
-            "-b:v",
-            "700k",
-            "-maxrate",
-            "900k",
-            "-bufsize",
-            "1400k",
-            "-g",
-            &keyframe_interval,
-            "-keyint_min",
-            &keyframe_interval,
-            "-sc_threshold",
-            "0",
-            "-bf",
-            "0",
-            "-pix_fmt",
-            "yuv420p",
-            "-f",
-            "matroska",
-            temporary_path,
-        ])
+    let mut command = Command::new("ffmpeg");
+    command.args(["-y", "-loglevel", "error", "-i", video_path]);
+    if let Some(lyrics_path) = lyrics_path {
+        command.args(["-i", lyrics_path]);
+    }
+    command.args([
+        "-map",
+        "0:v:0",
+        "-an",
+        "-vf",
+        &filter,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-tune",
+        "fastdecode",
+        "-b:v",
+        "700k",
+        "-maxrate",
+        "900k",
+        "-bufsize",
+        "1400k",
+        "-g",
+        &keyframe_interval,
+        "-keyint_min",
+        &keyframe_interval,
+        "-sc_threshold",
+        "0",
+        "-bf",
+        "0",
+    ]);
+    if lyrics_path.is_some() {
+        let synced = if lyrics_synced == Some(true) {
+            "1"
+        } else {
+            "0"
+        };
+        command.args([
+            "-map",
+            "1:0",
+            "-c:s",
+            "srt",
+            "-metadata:s:s:0",
+            "title=Crest Lyrics",
+            "-metadata:s:s:0",
+            &format!("crest_synced={synced}"),
+        ]);
+    }
+    let status = command
+        .args(["-pix_fmt", "yuv420p", "-f", "matroska", temporary_path])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -110,6 +142,45 @@ fn build_video_cache_inner(
         return Err(io::Error::other("ffmpeg could not preprocess video"));
     }
     std::fs::rename(temporary_path, cache_path)
+}
+
+fn lyrics_as_webvtt(lyrics: &Lyrics) -> String {
+    let mut output = String::from("WEBVTT\n\n");
+    if !lyrics.synced {
+        output.push_str("NOTE CREST_SYNCED=0\n\n");
+    }
+    for (index, line) in lyrics.lines.iter().enumerate() {
+        let start = line
+            .timestamp
+            .unwrap_or_else(|| std::time::Duration::from_secs(index as u64 * 5));
+        let end = lyrics
+            .lines
+            .get(index + 1)
+            .and_then(|next| next.timestamp)
+            .filter(|next| *next > start)
+            .unwrap_or(start + std::time::Duration::from_secs(5));
+        output.push_str(&format!(
+            "{} --> {}\n{}\n",
+            webvtt_timestamp(start),
+            webvtt_timestamp(end),
+            line.text.replace("-->", "→")
+        ));
+        if let Some(romaji) = &line.romaji {
+            output.push_str(&romaji.replace("-->", "→"));
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn webvtt_timestamp(duration: std::time::Duration) -> String {
+    let millis = duration.as_millis();
+    let hours = millis / 3_600_000;
+    let minutes = millis / 60_000 % 60;
+    let seconds = millis / 1_000 % 60;
+    let millis = millis % 1_000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
 }
 
 impl VideoCache {
@@ -229,8 +300,11 @@ fn read_u64(reader: &mut impl Read) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DELTA_MAGIC, MAGIC, VideoCache};
+    use super::{DELTA_MAGIC, MAGIC, VideoCache, build_video_cache};
+    use crate::lyrics::{LyricLine, Lyrics};
     use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
 
     #[test]
     fn reads_indexed_compressed_frames() {
@@ -280,5 +354,81 @@ mod tests {
         assert_eq!(cache.read_frame(0).unwrap(), vec![10, 20, 30]);
         assert_eq!(cache.read_frame(1).unwrap(), vec![11, 22, 33]);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn embeds_lyrics_in_compact_video_cache() {
+        let base = std::env::temp_dir().join(format!("crest-lyrics-test-{}", std::process::id()));
+        let source = base.with_extension("mkv");
+        let cache = base.with_extension("crestvid");
+        let generated = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:size=64x64:rate=15:duration=1",
+                "-c:v",
+                "libx264",
+                source.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(generated.success());
+        let lyrics = Lyrics {
+            synced: true,
+            lines: vec![LyricLine {
+                timestamp: Some(Duration::ZERO),
+                text: "Embedded lyric".to_string(),
+                romaji: None,
+            }],
+        };
+        build_video_cache(
+            source.to_str().unwrap(),
+            cache.to_str().unwrap(),
+            64,
+            64,
+            15,
+            Some(&lyrics),
+        )
+        .unwrap();
+        let extracted = Command::new("ffmpeg")
+            .args([
+                "-loglevel",
+                "error",
+                "-i",
+                cache.to_str().unwrap(),
+                "-map",
+                "0:s:0",
+                "-f",
+                "webvtt",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(extracted.status.success());
+        assert!(String::from_utf8_lossy(&extracted.stdout).contains("Embedded lyric"));
+        let metadata = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "s:0",
+                "-show_entries",
+                "stream_tags=CREST_SYNCED",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                cache.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&metadata.stdout).trim(), "1");
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(cache);
     }
 }

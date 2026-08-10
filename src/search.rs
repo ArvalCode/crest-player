@@ -1,4 +1,5 @@
 //
+use crate::lyrics::fetch_lyrics_with_caption_fallback;
 use crate::video_cache::build_video_cache;
 use dirs::audio_dir;
 use std::path::PathBuf;
@@ -80,12 +81,14 @@ pub fn download_audio(
                 .status()
                 .is_ok_and(|status| status.success());
             if video_downloaded {
+                let lyrics = fetch_lyrics_with_caption_fallback(title, url).ok();
                 let _ = build_video_cache(
                     video_path.to_str().unwrap_or_default(),
                     cache_path.to_str().unwrap_or_default(),
                     width,
                     height,
                     fps,
+                    lyrics.as_ref(),
                 );
             }
             let _ = std::fs::remove_file(video_path);

@@ -68,11 +68,74 @@ pub fn fetch_lyrics_with_caption_fallback(
     title: &str,
     video_source: &str,
 ) -> Result<Lyrics, String> {
-    fetch_lyrics(title).or_else(|lyrics_error| {
-        fetch_video_captions(video_source).map_err(|caption_error| {
-            format!("{lyrics_error} Caption fallback also failed: {caption_error}")
+    fetch_embedded_lyrics(video_source)
+        .or_else(|_| fetch_lyrics(title))
+        .or_else(|lyrics_error| {
+            fetch_video_captions(video_source).map_err(|caption_error| {
+                format!("{lyrics_error} Caption fallback also failed: {caption_error}")
+            })
         })
-    })
+}
+
+fn fetch_embedded_lyrics(video_source: &str) -> Result<Lyrics, String> {
+    let path = std::path::Path::new(video_source);
+    if !path.is_file()
+        || path.extension().and_then(|extension| extension.to_str()) != Some("crestvid")
+    {
+        return Err("No embedded lyrics source.".to_string());
+    }
+    let output = Command::new("ffmpeg")
+        .args([
+            "-loglevel",
+            "error",
+            "-i",
+            video_source,
+            "-map",
+            "0:s:0",
+            "-f",
+            "webvtt",
+            "pipe:1",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|error| format!("Could not read embedded lyrics: {error}"))?;
+    if !output.status.success() {
+        return Err("This cache has no embedded lyrics.".to_string());
+    }
+    let contents = String::from_utf8_lossy(&output.stdout);
+    let mut lines = parse_webvtt(&contents);
+    if lines.is_empty() {
+        return Err("Embedded lyrics were empty.".to_string());
+    }
+    let synced = embedded_lyrics_are_synced(video_source);
+    if !synced {
+        for line in &mut lines {
+            line.timestamp = None;
+        }
+    }
+    Ok(Lyrics { lines, synced })
+}
+
+fn embedded_lyrics_are_synced(video_source: &str) -> bool {
+    Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "s:0",
+            "-show_entries",
+            "stream_tags=CREST_SYNCED",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_source,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_none_or(|output| String::from_utf8_lossy(&output.stdout).trim() != "0")
 }
 
 fn fetch_video_captions(video_source: &str) -> Result<Lyrics, String> {
