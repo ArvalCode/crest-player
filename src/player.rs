@@ -11,6 +11,7 @@ pub struct Player {
     playback_started: Option<Instant>,
     elapsed_before_start: Duration,
     current_path: Option<String>,
+    last_finished_title: Option<String>,
     video_sources: HashMap<String, String>,
     video_files: HashMap<String, String>,
 }
@@ -26,6 +27,7 @@ impl Player {
             playback_started: None,
             elapsed_before_start: Duration::default(),
             current_path: None,
+            last_finished_title: None,
             video_sources: HashMap::new(),
             video_files: HashMap::new(),
         }
@@ -49,6 +51,19 @@ impl Player {
             }
         }
         self.stop();
+        // A streaming download creates its output file before it has finished.
+        // Do not treat that partial file as playable until the completion event
+        // replaces the temporary queue label with the resolved title.
+        if title.ends_with(" (Downloading...)")
+            && path.contains("ytmusic_play_")
+            && path.ends_with(".mp3")
+        {
+            self.status = "Downloading...".to_string();
+            self.title = Some(title.trim_end_matches(" (Downloading...)").to_string());
+            self.current_path = Some(path.to_string());
+            self.queue.push((title.to_string(), path.to_string()));
+            return;
+        }
         // If path is a local file and exists, play directly
         // If path is in the library, use the actual file path
         let play_path = if Path::new(path).exists()
@@ -93,6 +108,7 @@ impl Player {
         self.child = Some(child);
         self.current_path = Some(play_path);
         self.title = Some(title.to_string());
+        self.last_finished_title = None;
         self.status = "Playing".to_string();
         self.elapsed_before_start = Duration::default();
         self.playback_started = Some(Instant::now());
@@ -211,7 +227,28 @@ impl Player {
         self.current_path = None;
         self.playback_started = None;
         self.elapsed_before_start = Duration::default();
+        self.last_finished_title = None;
         // Do not clear the queue here; only clear on quit
+    }
+
+    pub fn last_finished_title(&self) -> Option<&str> {
+        self.last_finished_title.as_deref()
+    }
+
+    pub fn download_failed(&mut self, path: &str) -> bool {
+        if self.child.is_some()
+            || self.status != "Downloading..."
+            || self.current_path.as_deref() != Some(path)
+        {
+            return false;
+        }
+        self.status = "Stopped".to_string();
+        self.title = None;
+        self.current_path = None;
+        self.playback_started = None;
+        self.elapsed_before_start = Duration::default();
+        self.advance_queue();
+        true
     }
     pub fn is_playing(&mut self) -> bool {
         use std::fs;
@@ -220,7 +257,7 @@ impl Player {
                 Ok(Some(_)) => {
                     self.child = None;
                     self.status = "Stopped".to_string();
-                    self.title = None;
+                    self.last_finished_title = self.title.take();
                     self.current_path = None;
                     self.playback_started = None;
                     self.elapsed_before_start = Duration::default();
@@ -233,27 +270,36 @@ impl Player {
                         self.video_sources.remove(&last);
                         self.remove_video_file(&last);
                     }
-                    // Play next in queue if available (FIFO order)
-                    if !self.queue.is_empty() {
-                        let (title, path) = self.queue.remove(0);
-                        self.play(&path, &title);
-                        return true;
-                    }
-                    false
+                    self.advance_queue()
                 }
                 // The process is still running, but playback state did not change.
                 Ok(None) => false,
                 Err(_) => false,
             }
         } else {
-            if self.status != "Downloading..." && !self.queue.is_empty() {
-                let (title, path) = self.queue.remove(0);
-                self.play(&path, &title);
-                true
+            if self.status != "Downloading..." {
+                self.advance_queue()
             } else {
                 false
             }
         }
+    }
+
+    fn advance_queue(&mut self) -> bool {
+        let Some((title, path)) = self.queue.first().cloned() else {
+            return false;
+        };
+        if title.ends_with(" (Downloading...)") {
+            self.status = "Downloading...".to_string();
+            self.title = Some(title.trim_end_matches(" (Downloading...)").to_string());
+            self.current_path = Some(path);
+            self.playback_started = None;
+            self.elapsed_before_start = Duration::default();
+            return true;
+        }
+        self.queue.remove(0);
+        self.play(&path, &title);
+        true
     }
 
     pub fn position(&self) -> Duration {
@@ -342,5 +388,40 @@ mod tests {
         assert_eq!(player.queue.len(), 1);
         assert!(!player.is_playing());
         assert_eq!(player.queue.len(), 1);
+    }
+
+    #[test]
+    fn partial_download_file_is_not_started_early() {
+        let mut player = Player::new();
+        let path = std::env::temp_dir().join(format!(
+            "ytmusic_play_partial_test_{}.mp3",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"partial audio").unwrap();
+        player.queue.push((
+            "Pending (Downloading...)".to_string(),
+            path.to_string_lossy().into_owned(),
+        ));
+
+        assert!(player.is_playing());
+        assert!(player.child.is_none());
+        assert_eq!(player.status, "Downloading...");
+        assert_eq!(player.queue.len(), 1);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn failed_download_releases_the_waiting_state() {
+        let mut player = Player::new();
+        let failed_path = "ytmusic_play_failed_test.mp3";
+        player.status = "Downloading...".to_string();
+        player.title = Some("Failed".to_string());
+        player.current_path = Some(failed_path.to_string());
+
+        assert!(player.download_failed(failed_path));
+        assert_eq!(player.status, "Stopped");
+        assert!(player.title.is_none());
+        assert!(player.current_path.is_none());
     }
 }

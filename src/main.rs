@@ -107,28 +107,6 @@ impl FramePacer {
     }
 }
 
-#[cfg(test)]
-mod frame_pacer_tests {
-    use super::FramePacer;
-    use std::time::Duration;
-
-    #[test]
-    fn fixed_fps_never_adapts() {
-        let mut pacer = FramePacer::new();
-        assert_eq!(pacer.target(60), 60);
-        pacer.record(Duration::from_millis(100), 60);
-        assert_eq!(pacer.target(60), 60);
-    }
-
-    #[test]
-    fn auto_fps_reduces_an_unsustainable_rate() {
-        let mut pacer = FramePacer::new();
-        assert_eq!(pacer.target(0), 30);
-        pacer.record(Duration::from_millis(40), 0);
-        assert_eq!(pacer.target(0), 24);
-    }
-}
-
 fn draw_synchronized<W, F>(
     terminal: &mut Terminal<CrosstermBackend<W>>,
     render: F,
@@ -184,39 +162,17 @@ fn queue_youtube_download(
         .queue
         .push((format!("{title} (Downloading...)"), path_string.clone()));
 
-    if prefetch_video {
-        let video_path = std::env::temp_dir()
-            .join(format!("ytmusic_video_{unique}.cache"))
-            .to_string_lossy()
-            .into_owned();
-        let video_audio_path = path_string.clone();
-        let video_url = url.clone();
-        let video_sender = video_sender.clone();
-        std::thread::spawn(move || {
-            let success = Command::new("yt-dlp")
-                .args([
-                    "--no-playlist",
-                    "-f",
-                    "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
-                    "-o",
-                    &video_path,
-                    &video_url,
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false);
-            if let Err(error) = video_sender.send(VideoPrefetchFinished {
-                audio_path: video_audio_path,
-                video_path,
-                success,
-            }) {
-                let _ = std::fs::remove_file(error.0.video_path);
-            }
-        });
-    }
+    let video_prefetch = prefetch_video.then(|| {
+        (
+            video_sender.clone(),
+            path_string.clone(),
+            std::env::temp_dir()
+                .join(format!("ytmusic_video_{unique}.cache"))
+                .to_string_lossy()
+                .into_owned(),
+            url.clone(),
+        )
+    });
 
     let sender = sender.clone();
     let title = title.to_string();
@@ -228,6 +184,9 @@ fn queue_youtube_download(
                 "-x",
                 "--audio-format",
                 "mp3",
+                // `--print` otherwise implies yt-dlp's simulation mode, which
+                // reports success without downloading or creating the MP3.
+                "--no-simulate",
                 "--print",
                 "%(title)s",
                 "-o",
@@ -255,6 +214,36 @@ fn queue_youtube_download(
             autoplay,
             success,
         });
+
+        // Audio is the critical path for queue advancement. Fetch the optional
+        // video only after notifying the player that its audio is ready, rather
+        // than making both downloads compete for bandwidth and extractor work.
+        if success
+            && let Some((video_sender, audio_path, video_path, video_url)) = video_prefetch
+        {
+            let video_success = Command::new("yt-dlp")
+                .args([
+                    "--no-playlist",
+                    "-f",
+                    "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
+                    "-o",
+                    &video_path,
+                    &video_url,
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if let Err(error) = video_sender.send(VideoPrefetchFinished {
+                audio_path,
+                video_path,
+                success: video_success,
+            }) {
+                let _ = std::fs::remove_file(error.0.video_path);
+            }
+        }
     });
 }
 
@@ -287,6 +276,7 @@ fn process_download_completions(
                 player.queue[index].0 = download.title;
             } else {
                 player.queue.remove(index);
+                player.download_failed(&download.path);
                 app.error = Some(format!("Failed to download {}", download.title));
             }
             changed = true;
@@ -319,6 +309,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut autoplay_requested_for: Option<String>;
     let mut lyrics_requested_for: Option<String> = None;
     let mut lyrics_requested_at: Option<Instant> = None;
+    let mut autoplay_history: Vec<String> = Vec::new();
 
     let mut startup_selected = 0; // 0 = stream+downloaded, 1 = downloaded only
     let mut settings_selected = 0;
@@ -935,11 +926,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             needs_redraw = true;
         }
         while let Ok((seed_title, result)) = recommendation_rx.try_recv() {
+            let seed_is_relevant = player.title.as_ref() == Some(&seed_title)
+                || player.last_finished_title() == Some(seed_title.as_str());
             if app.autoplay_enabled
-                && player.title.as_ref() == Some(&seed_title)
+                && seed_is_relevant
                 && player.queue.is_empty()
                 && let Ok(recommendation) = result
             {
+                autoplay_history.push(recommendation.video_id.clone());
+                if autoplay_history.len() > 20 {
+                    autoplay_history.remove(0);
+                }
                 queue_youtube_download(
                     &mut player,
                     &download_tx,
@@ -963,9 +960,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 autoplay_requested_for = Some(title.clone());
                 let video_id = player.current_video_id();
+                if let Some(video_id) = video_id.as_ref()
+                    && !autoplay_history.contains(video_id)
+                {
+                    autoplay_history.push(video_id.clone());
+                    if autoplay_history.len() > 20 {
+                        autoplay_history.remove(0);
+                    }
+                }
+                let excluded_video_ids = autoplay_history.clone();
                 let tx = recommendation_tx.clone();
                 std::thread::spawn(move || {
-                    let result = youtube_mix_recommendation(&title, video_id.as_deref());
+                    let result = youtube_mix_recommendation(
+                        &title,
+                        video_id.as_deref(),
+                        &excluded_video_ids,
+                    );
                     let _ = tx.send((title, result));
                 });
             }
@@ -1094,4 +1104,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // (Performance summary output removed)
     Ok(())
+}
+
+#[cfg(test)]
+mod frame_pacer_tests {
+    use super::FramePacer;
+    use std::time::Duration;
+
+    #[test]
+    fn fixed_fps_never_adapts() {
+        let mut pacer = FramePacer::new();
+        assert_eq!(pacer.target(60), 60);
+        pacer.record(Duration::from_millis(100), 60);
+        assert_eq!(pacer.target(60), 60);
+    }
+
+    #[test]
+    fn auto_fps_reduces_an_unsustainable_rate() {
+        let mut pacer = FramePacer::new();
+        assert_eq!(pacer.target(0), 30);
+        pacer.record(Duration::from_millis(40), 0);
+        assert_eq!(pacer.target(0), 24);
+    }
 }
