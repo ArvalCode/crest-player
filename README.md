@@ -21,6 +21,59 @@ ASCII music-video display when left idle.
 - Persist settings in the platform configuration directory; on Linux this is
   normally `~/.config/crest-player/settings.json`.
 
+## How It Works
+
+### Non-blocking downloads and progressive streams
+
+Search, stream resolution, permanent downloads, lyrics, and video-cache builds
+run outside the input loop. Active jobs appear in a temporary **Download Queue**
+panel, which closes when the final job finishes. Streamed tracks resolve
+YouTube's best audio URL and play progressively through `ffplay`; they are not
+downloaded as complete temporary MP3s. Permanent `Ctrl+L` downloads still save
+an MP3 and build its reusable video cache.
+
+### Compact `.crestvid` caches
+
+New `.crestvid` files are Matroska containers tuned for terminal playback:
+
+- H.264 video at 700 kbps, capped at 900 kbps
+- YUV420 color and Lanczos scaling at terminal resolution
+- ten-second keyframe boundaries for bounded seeking
+- the x264 `slow` preset for better quality at the target size
+- no audio duplication; the library MP3 remains separate
+- embedded synchronized or plain lyrics when available
+
+A four-minute cache typically targets roughly 20–27 MB, although simple videos
+may be smaller. Crest Player also reads older V1/V2 indexed zstd caches. Cache
+deletion is limited to songs and sidecar videos recorded in Crest Player's
+library index.
+
+### Smooth, clock-driven video
+
+Video decoding starts when audio playback begins, before Ambient appears. A
+background FFmpeg worker decodes up to ten seconds ahead while Crest Player keeps
+up to ten seconds of recent frames for backward seeking. Both sides are bounded
+by 64 MiB memory limits. Presentation follows the audio clock: obsolete frames
+are dropped instead of rendered in a catch-up burst, and future frames wait for
+their timestamp. Synchronized terminal updates reduce tearing.
+
+Fixed 15, 24, 30, and 60 FPS modes are available. **AUTO** starts at 30 FPS and
+adapts to measured terminal-render cost. FFmpeg can use available CPU threads;
+optional hardware decoding retries in software if acceleration fails.
+
+### Lyrics, recommendations, and presentation
+
+Lyrics come from LRCLIB with manual or automatic YouTube captions as fallback.
+Japanese text can be romanized locally, and downloaded caches carry their lyric
+subtitle stream plus a marker indicating whether timing is genuine. Playback
+checks embedded lyrics before using the network.
+
+Autoplay resolves a YouTube Mix recommendation in the background and never
+jumps ahead of manually queued tracks. Home keeps audio and queue progression
+active without opening the video overlay. A visible video frame can also be
+captured into the persisted Home wallpaper format without storing another full
+video.
+
 ## ASCII Music-Video Playback
 
 ![A music video rendered as colored ASCII characters in Crest Player](docs/video-playback-ascii.png)
