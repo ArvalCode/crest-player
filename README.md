@@ -260,12 +260,12 @@ For a complete interactive uninstall, run:
 crest-player --remove
 ```
 
-The command explains what will be deleted and requires typing `REMOVE` before
-changing anything. It removes indexed downloads and interrupted-download
-sidecars, settings, the captured wallpaper, the library index, and the installed
-program/launcher/icon. Package installations are removed through `pacman`;
-on Linux, removing the application files requires `sudo`, while personal media
-and configuration cleanup runs as the current user before elevation.
+The command offers three choices: remove only the application while keeping
+music and settings, remove only indexed music/video while keeping the application
+and settings, or remove everything. It explains the selected scope and requires
+typing `REMOVE` before changing anything. Package installations are removed
+through `pacman`; on Linux, choices that remove application files require
+`sudo`, while personal media and configuration cleanup runs as the current user.
 After successful removal, it reports the total amount of Crest Player storage
 removed in MiB.
 The command refuses to uninstall when run from a development checkout or an

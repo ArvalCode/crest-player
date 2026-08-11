@@ -10,22 +10,40 @@ pub fn remove_crest_player() -> Result<(), String> {
         return Err("usage: crest-player --remove".to_string());
     }
 
-    let executable = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .map_err(|error| format!("could not identify the running executable: {error}"))?;
-    let installation = Installation::detect(&executable)?;
-    let removal_bytes = estimated_removal_bytes(&installation);
-
     println!("Crest Player removal");
     println!();
-    println!("This will permanently remove:");
-    println!("  - every MP3 and .crestvid file in Crest Player's library index");
-    println!("  - the library index, settings, and captured Home wallpaper");
-    println!("  - the installed executable, launcher, desktop entry, and icon");
+    println!("Choose what to remove:");
+    println!("  1. Application only (keep music and settings)");
+    println!("  2. Music and video only (keep the application and settings)");
+    println!("  3. Everything (application, media, and settings)");
     println!();
+    print!("Enter 1, 2, or 3: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("could not display the removal menu: {error}"))?;
+    let mut selection = String::new();
+    io::stdin()
+        .read_line(&mut selection)
+        .map_err(|error| format!("could not read the removal selection: {error}"))?;
+    let choice = RemovalChoice::parse(selection.trim())?;
+
+    let installation = if choice.removes_application() {
+        let executable = std::env::current_exe()
+            .and_then(|path| path.canonicalize())
+            .map_err(|error| format!("could not identify the running executable: {error}"))?;
+        Some(Installation::detect(&executable)?)
+    } else {
+        None
+    };
+    let removal_bytes = estimated_removal_bytes(choice, installation.as_ref());
+
+    println!();
+    println!("Selected: {}", choice.label());
     println!("Music files not recorded in Crest Player's index will not be touched.");
     #[cfg(unix)]
-    println!("Removing the installed application files will require sudo.");
+    if choice.removes_application() {
+        println!("Removing the installed application files will require sudo.");
+    }
     print!("Type REMOVE to continue: ");
     io::stdout()
         .flush()
@@ -40,9 +58,16 @@ pub fn remove_crest_player() -> Result<(), String> {
         return Ok(());
     }
 
-    remove_user_data()?;
-    installation.remove()?;
-    println!("Crest Player and its data were removed successfully.");
+    if choice.removes_media() {
+        remove_media_data()?;
+    }
+    if choice.removes_configuration() {
+        remove_configuration()?;
+    }
+    if let Some(installation) = installation {
+        installation.remove()?;
+    }
+    println!("{} removed successfully.", choice.label());
     println!(
         "Removed {:.2} MiB from this computer.",
         removal_bytes as f64 / (1024.0 * 1024.0)
@@ -50,8 +75,69 @@ pub fn remove_crest_player() -> Result<(), String> {
     Ok(())
 }
 
-fn estimated_removal_bytes(installation: &Installation) -> u64 {
-    let mut files: HashSet<PathBuf> = installation.installed_paths().into_iter().collect();
+#[derive(Clone, Copy)]
+enum RemovalChoice {
+    Application,
+    Media,
+    Everything,
+}
+
+impl RemovalChoice {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "1" => Ok(Self::Application),
+            "2" => Ok(Self::Media),
+            "3" => Ok(Self::Everything),
+            _ => Err("invalid selection; run crest-player --remove and choose 1, 2, or 3".into()),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Application => "Crest Player application",
+            Self::Media => "Crest Player music and video",
+            Self::Everything => "Crest Player application and all data",
+        }
+    }
+
+    fn removes_application(self) -> bool {
+        matches!(self, Self::Application | Self::Everything)
+    }
+
+    fn removes_media(self) -> bool {
+        matches!(self, Self::Media | Self::Everything)
+    }
+
+    fn removes_configuration(self) -> bool {
+        matches!(self, Self::Everything)
+    }
+}
+
+fn estimated_removal_bytes(choice: RemovalChoice, installation: Option<&Installation>) -> u64 {
+    let mut total = installation
+        .filter(|_| choice.removes_application())
+        .map(installation_size)
+        .unwrap_or(0);
+    if choice.removes_media() {
+        total = total.saturating_add(media_size());
+    }
+    if choice.removes_configuration() {
+        total = total.saturating_add(configuration_size());
+    }
+    total
+}
+
+fn installation_size(installation: &Installation) -> u64 {
+    installation
+        .installed_paths()
+        .iter()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .filter(|metadata| metadata.is_file())
+        .fold(0u64, |total, metadata| total.saturating_add(metadata.len()))
+}
+
+fn media_size() -> u64 {
+    let mut files = HashSet::new();
     for (_, path) in App::new().library {
         let music = PathBuf::from(path);
         files.insert(music.with_extension("crestvid"));
@@ -64,17 +150,18 @@ fn estimated_removal_bytes(installation: &Installation) -> u64 {
     if let Some(audio_directory) = dirs::audio_dir() {
         files.insert(audio_directory.join("ytmusic_library.csv"));
     }
-
-    let file_bytes = files
+    files
         .iter()
         .filter_map(|path| std::fs::metadata(path).ok())
         .filter(|metadata| metadata.is_file())
-        .fold(0u64, |total, metadata| total.saturating_add(metadata.len()));
-    let config_bytes = dirs::config_dir()
+        .fold(0u64, |total, metadata| total.saturating_add(metadata.len()))
+}
+
+fn configuration_size() -> u64 {
+    dirs::config_dir()
         .map(|directory| directory.join("crest-player"))
         .map(|directory| directory_size(&directory))
-        .unwrap_or(0);
-    file_bytes.saturating_add(config_bytes)
+        .unwrap_or(0)
 }
 
 fn directory_size(directory: &Path) -> u64 {
@@ -94,7 +181,7 @@ fn directory_size(directory: &Path) -> u64 {
     })
 }
 
-fn remove_user_data() -> Result<(), String> {
+fn remove_media_data() -> Result<(), String> {
     let mut app = App::new();
     let indexed_paths: Vec<PathBuf> = app
         .library
@@ -129,17 +216,19 @@ fn remove_user_data() -> Result<(), String> {
     }
     remove_file_if_present(&audio_directory.join("ytmusic_library.csv"))?;
 
-    if let Some(config_directory) = dirs::config_dir() {
-        let directory = config_directory.join("crest-player");
-        match std::fs::remove_dir_all(&directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!("could not remove {}: {error}", directory.display()));
-            }
-        }
-    }
     Ok(())
+}
+
+fn remove_configuration() -> Result<(), String> {
+    let Some(config_directory) = dirs::config_dir() else {
+        return Ok(());
+    };
+    let directory = config_directory.join("crest-player");
+    match std::fs::remove_dir_all(&directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not remove {}: {error}", directory.display())),
+    }
 }
 
 fn remove_file_if_present(path: &Path) -> Result<(), String> {
