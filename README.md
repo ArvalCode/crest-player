@@ -99,22 +99,27 @@ all affect smoothness. Audio stays synchronized when late video frames are
 dropped. A GPU-accelerated terminal such as [Kitty](https://sw.kovidgoyal.net/kitty/)
 is recommended.
 
-## Performance Benchmark
+## Active Video CPU Benchmark
 
 Measured on an **Intel Core Ultra 9 386H** with 16 logical CPUs using a release
 build, 80×24 terminal, ASCII Fast, High color precision, 60 FPS, hardware
 acceleration, and autoplay. Results average 30 one-second samples and include all
-media child processes. Here, 100% equals one fully occupied logical CPU.
+media child processes. The video overlay remained active throughout both runs,
+including decode-ahead, audio-clock scheduling, ASCII conversion, synchronized
+lyrics, and terminal rendering. Here, 100% equals one fully occupied logical CPU.
 
 | Playback mode | Crest Player | `ffplay` | `ffmpeg` | `yt-dlp` | Combined average | Combined peak | Average total capacity | Peak total capacity |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Downloaded MP3 + 8.6 MB `.crestvid` | 2.57% | 0.65% | 11.51% | 0.00% | **14.73%** | 22.10% | **0.92%** | 1.38% |
 | Streamed song + live video | 1.36% | 2.76% | 46.89% | 7.90% | **58.90%** | 346.50% | **3.68%** | 21.66% |
 
-Downloaded playback used **Liza – PARALLEL feat. 7** and its cache; streaming used
-**Daft Punk – One More Time**. Streaming averaged about 4× more CPU. Its peak was
-a brief resolution/prebuffering burst. GPU usage was not measured; results vary
-by terminal, network, settings, and FFmpeg build.
+Downloaded playback used **Liza – PARALLEL feat. 7** and its 8.6 MB cache;
+streaming used **Daft Punk – One More Time** with live video processing.
+Downloaded video averaged **14.73% of one core** (**0.92%** of the full CPU),
+while streamed video averaged **58.90% of one core** (**3.68%** overall). The
+streaming peak was a brief URL-resolution and prebuffering burst, not sustained
+load. GPU usage was not measured; results vary by terminal, network, settings,
+and FFmpeg build.
 
 ## Controls
 
