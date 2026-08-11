@@ -194,6 +194,52 @@ desktop launcher makes it appear in the application menu with its own name and
 icon, but opening it still creates a terminal window; it is not yet a native GUI
 window.
 
+### Security model
+
+Crest Player treats YouTube titles, identifiers, URLs, captions, lyrics,
+subprocess output, cache files, and the local library index as potentially
+untrusted. Its main defenses are:
+
+- **Terminal-injection resistance:** remote text is stripped of control
+  characters and bidirectional-override/isolate characters before display.
+  Length limits also prevent an attacker-controlled title or lyric from growing
+  without bound.
+- **Command-injection resistance:** media tools are started with structured
+  process arguments rather than by building a shell command from remote text.
+  Executables are resolved only through absolute `PATH` entries and then
+  canonicalized, preventing an empty or relative `PATH` entry from selecting a
+  planted executable in the current working directory.
+- **Identifier and URL validation:** YouTube IDs accept only a bounded set of
+  ASCII letters, digits, `_`, and `-`. Playback URLs must parse as HTTP or HTTPS,
+  have a host, and contain no embedded username or password. Local-file and
+  credential-bearing URL schemes returned as network media are rejected.
+- **Path containment:** remote titles are converted into a single bounded
+  filename component. Separators and platform-sensitive punctuation are
+  replaced, and the resulting download path is checked to remain inside the
+  Music directory.
+- **Resource-exhaustion limits:** remote responses, subprocess output, settings,
+  the library index, wallpaper data, cache dimensions, frame sizes, frame counts,
+  compressed blocks, and live video buffers have explicit size or time bounds.
+  Oversized or malformed inputs are rejected instead of being fully allocated.
+- **Restricted deletion:** normal and bulk media deletion canonicalize paths and
+  refuse targets outside the current user's Music directory. Bulk deletion acts
+  only on files recorded in Crest Player's library index. Uninstallation accepts
+  only recognized installation locations, explains its scope, and requires the
+  user to type `REMOVE` before changing files.
+- **Least ambient activity:** Crest Player installs no background daemon,
+  service, scheduled task, registry entry, or inbound network listener. Media
+  helpers run with the same operating-system account and permissions as Crest
+  Player and end when playback or the application ends.
+
+These controls reduce attacks delivered through malicious metadata, URLs,
+filenames, oversized responses, altered cache/index files, or a hostile working
+directory. They do not make Crest Player a sandbox, antivirus product, or
+privilege boundary. A malicious replacement for `yt-dlp`, FFmpeg, Crest Player,
+or another executable in an absolute `PATH` directory still runs with the
+user's permissions. Install software from trusted sources, keep dependencies
+updated, avoid running the player as root/Administrator, and protect writable
+`PATH`, configuration, and Music directories from other untrusted accounts.
+
 ### Build from source
 
 Install Rust, Cargo, `yt-dlp`, and FFmpeg (`ffplay` must be included).
