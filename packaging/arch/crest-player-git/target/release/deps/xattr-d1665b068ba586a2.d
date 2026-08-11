@@ -1,0 +1,11 @@
+/home/nolantran/Github_Projects/crest-player/packaging/arch/crest-player-git/target/release/deps/xattr-d1665b068ba586a2.d: /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/lib.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/error.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/mod.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/util.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/linux_macos.rs
+
+/home/nolantran/Github_Projects/crest-player/packaging/arch/crest-player-git/target/release/deps/libxattr-d1665b068ba586a2.rlib: /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/lib.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/error.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/mod.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/util.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/linux_macos.rs
+
+/home/nolantran/Github_Projects/crest-player/packaging/arch/crest-player-git/target/release/deps/libxattr-d1665b068ba586a2.rmeta: /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/lib.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/error.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/mod.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/util.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/linux_macos.rs
+
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/lib.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/error.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/mod.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/util.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xattr-1.5.0/src/sys/linux_macos.rs:

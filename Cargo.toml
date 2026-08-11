@@ -2,6 +2,10 @@
 name = "crest-player"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal music player with YouTube streaming, synchronized lyrics, and ASCII video"
+license = "MIT"
+repository = "https://github.com/ArvalCode/crest-player"
+readme = "README.md"
 
 [dependencies]
 ratatui = "0.26"

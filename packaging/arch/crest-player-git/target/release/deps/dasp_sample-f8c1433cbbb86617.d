@@ -1,0 +1,10 @@
+/home/nolantran/Github_Projects/crest-player/packaging/arch/crest-player-git/target/release/deps/dasp_sample-f8c1433cbbb86617.d: /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/lib.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/conv.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/ops.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/types.rs
+
+/home/nolantran/Github_Projects/crest-player/packaging/arch/crest-player-git/target/release/deps/libdasp_sample-f8c1433cbbb86617.rlib: /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/lib.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/conv.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/ops.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/types.rs
+
+/home/nolantran/Github_Projects/crest-player/packaging/arch/crest-player-git/target/release/deps/libdasp_sample-f8c1433cbbb86617.rmeta: /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/lib.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/conv.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/ops.rs /home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/types.rs
+
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/lib.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/conv.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/ops.rs:
+/home/nolantran/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dasp_sample-0.11.0/src/types.rs:
