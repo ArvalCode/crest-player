@@ -32,6 +32,13 @@ YouTube's best audio URL and play progressively through `ffplay`; they are not
 downloaded as complete temporary MP3s. Permanent `Ctrl+L` downloads still save
 an MP3 and build its reusable video cache.
 
+Crest Player records the duration reported by YouTube when it resolves a stream.
+If `ffplay` exits before that duration because of a temporary network or media
+server interruption, the player displays **Reconnecting audio...** and resumes
+the same track from its last known position. It advances the queue only after
+the track reaches its expected end. A connection interruption can therefore
+produce a short pause, but should not skip the unfinished song.
+
 ### Compact `.crestvid` caches
 
 New `.crestvid` files are Matroska containers tuned for terminal playback:
@@ -155,6 +162,40 @@ consumed; playback shortcuts continue to work in Ambient and Cinema.
 
 ## Getting Started
 
+### Client requirements
+
+To run a prebuilt Crest Player executable, the client computer needs:
+
+- `yt-dlp` available on `PATH` for YouTube search, stream resolution, downloads,
+  captions, and autoplay recommendations.
+- FFmpeg available on `PATH`, including both `ffmpeg` and `ffplay`, for audio and
+  video playback and cache creation.
+- A terminal with ANSI color, Unicode, and true-color support. A GPU-accelerated
+  terminal is recommended for smoother video rendering.
+- Internet access to YouTube for search and streaming, and to LRCLIB for online
+  lyrics. Previously downloaded songs remain playable without network access.
+- Write access to the current user's configuration and Music directories so the
+  app can save settings, wallpaper data, the library index, MP3 files, and
+  `.crestvid` video caches.
+
+Rust, Cargo, Git, and platform compiler tools are needed only when building from
+source; they are not runtime requirements for a prebuilt executable.
+
+Confirm the external runtime tools before starting Crest Player:
+
+```sh
+yt-dlp --version
+ffmpeg -version
+ffplay -version
+```
+
+The application currently uses a terminal-native Ratatui interface. A Linux
+desktop launcher makes it appear in the application menu with its own name and
+icon, but opening it still creates a terminal window; it is not yet a native GUI
+window.
+
+### Build from source
+
 Install Rust, Cargo, `yt-dlp`, and FFmpeg (`ffplay` must be included).
 
 Arch Linux:
@@ -176,6 +217,11 @@ Build and run:
 cargo build --release
 ./target/release/crest-player
 ```
+
+Run the executable from this exact location or copy it to a permanent location
+before installing desktop integration. The per-user launcher records the
+executable's absolute path, so moving or deleting it afterward breaks that
+launcher until `--install-desktop` is run again from the new location.
 
 Optional system-wide install:
 
@@ -201,6 +247,15 @@ crest-player --help
 Run `crest-player` without an option to open the player normally.
 
 ### Linux application launcher
+
+For a per-user launcher that does not require `sudo`, run:
+
+```sh
+./target/release/crest-player --install-desktop
+```
+
+This installs the launcher, desktop entry, and icon under `~/.local`. If Crest
+Player does not appear in the application menu immediately, log out and back in.
 
 The Arch package installs a **Crest Player** desktop entry that opens the app in
 a terminal. When a systemd user session is available, the launcher places Crest
@@ -240,6 +295,21 @@ cargo build --release
 ```
 
 Windows Terminal is recommended for ANSI color and Unicode rendering.
+
+### Playback troubleshooting
+
+- If Crest Player reports that it cannot start `ffplay`, verify that `ffplay` is
+  installed and available in the same environment's `PATH`.
+- If search or stream resolution fails, update `yt-dlp`; YouTube changes can make
+  older releases stop working.
+- If a stream is interrupted, leave the player running while it shows
+  **Reconnecting audio...**. It retries the unfinished song instead of advancing
+  the queue.
+- If video is choppy but audio remains synchronized, use **AUTO** or a lower FPS,
+  select **ASCII Fast**, lower Color Precision, enlarge the terminal font, or
+  disable hardware decoding if the local FFmpeg build does not support it.
+- Downloaded songs work offline, but lyrics or video may be unavailable unless
+  their data was embedded in the matching `.crestvid` cache.
 
 ### Windows data locations
 
