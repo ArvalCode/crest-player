@@ -195,6 +195,7 @@ crest-player --help
 | --- | --- |
 | `-h`, `--help` | Display command-line help and exit |
 | `--remove` | Interactively remove Crest Player and its data |
+| `--storage` | Display application, downloaded-music, and video-cache storage usage |
 
 Run `crest-player` without an option to open the player normally.
 
@@ -265,6 +266,8 @@ sidecars, settings, the captured wallpaper, the library index, and the installed
 program/launcher/icon. Package installations are removed through `pacman`;
 on Linux, removing the application files requires `sudo`, while personal media
 and configuration cleanup runs as the current user before elevation.
+After successful removal, it reports the total amount of Crest Player storage
+removed in MiB.
 The command refuses to uninstall when run from a development checkout or an
 unrecognized location, preventing accidental source-tree deletion.
 

@@ -1,5 +1,6 @@
 use crate::app::{App, save_library};
 use crate::security::{bounded_output, external_command};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ pub fn remove_crest_player() -> Result<(), String> {
         .and_then(|path| path.canonicalize())
         .map_err(|error| format!("could not identify the running executable: {error}"))?;
     let installation = Installation::detect(&executable)?;
+    let removal_bytes = estimated_removal_bytes(&installation);
 
     println!("Crest Player removal");
     println!();
@@ -41,7 +43,55 @@ pub fn remove_crest_player() -> Result<(), String> {
     remove_user_data()?;
     installation.remove()?;
     println!("Crest Player and its data were removed successfully.");
+    println!(
+        "Removed {:.2} MiB from this computer.",
+        removal_bytes as f64 / (1024.0 * 1024.0)
+    );
     Ok(())
+}
+
+fn estimated_removal_bytes(installation: &Installation) -> u64 {
+    let mut files: HashSet<PathBuf> = installation.installed_paths().into_iter().collect();
+    for (_, path) in App::new().library {
+        let music = PathBuf::from(path);
+        files.insert(music.with_extension("crestvid"));
+        files.insert(music.with_extension("video.cache"));
+        let mut partial = music.as_os_str().to_os_string();
+        partial.push(".part");
+        files.insert(PathBuf::from(partial));
+        files.insert(music);
+    }
+    if let Some(audio_directory) = dirs::audio_dir() {
+        files.insert(audio_directory.join("ytmusic_library.csv"));
+    }
+
+    let file_bytes = files
+        .iter()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .filter(|metadata| metadata.is_file())
+        .fold(0u64, |total, metadata| total.saturating_add(metadata.len()));
+    let config_bytes = dirs::config_dir()
+        .map(|directory| directory.join("crest-player"))
+        .map(|directory| directory_size(&directory))
+        .unwrap_or(0);
+    file_bytes.saturating_add(config_bytes)
+}
+
+fn directory_size(directory: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return 0;
+    };
+    entries.flatten().fold(0u64, |total, entry| {
+        let path = entry.path();
+        let size = match entry.file_type() {
+            Ok(file_type) if file_type.is_file() => {
+                entry.metadata().map(|meta| meta.len()).unwrap_or(0)
+            }
+            Ok(file_type) if file_type.is_dir() => directory_size(&path),
+            _ => 0,
+        };
+        total.saturating_add(size)
+    })
 }
 
 fn remove_user_data() -> Result<(), String> {
@@ -186,6 +236,52 @@ impl Installation {
             schedule_windows_executable_removal(&match self {
                 Self::Windows(path) => path,
             })
+        }
+    }
+
+    fn installed_paths(&self) -> Vec<PathBuf> {
+        #[cfg(unix)]
+        {
+            match self {
+                Self::SystemPackage(_) => vec![
+                    PathBuf::from("/usr/bin/crest-player"),
+                    PathBuf::from("/usr/bin/crest-player-launch"),
+                    PathBuf::from(
+                        "/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
+                    ),
+                    PathBuf::from(
+                        "/usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg",
+                    ),
+                    PathBuf::from("/usr/share/licenses/crest-player/LICENSE"),
+                    PathBuf::from("/usr/share/doc/crest-player/README.md"),
+                ],
+                Self::ManualSystem => vec![
+                    PathBuf::from("/usr/local/bin/crest-player"),
+                    PathBuf::from("/usr/local/bin/crest-player-launch"),
+                    PathBuf::from(
+                        "/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
+                    ),
+                    PathBuf::from(
+                        "/usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg",
+                    ),
+                ],
+                Self::ManualUser(home) => vec![
+                    home.join(".local/bin/crest-player"),
+                    home.join(".local/bin/crest-player-launch"),
+                    home.join(
+                        ".local/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
+                    ),
+                    home.join(
+                        ".local/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg",
+                    ),
+                ],
+            }
+        }
+        #[cfg(windows)]
+        {
+            match self {
+                Self::Windows(path) => vec![path.clone()],
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ mod player;
 mod recommendations;
 mod search;
 mod security;
+mod storage;
 mod ui_downloaded_only;
 mod ui_with_player;
 mod uninstall;
@@ -344,11 +345,13 @@ fn handle_command_line() -> Result<bool, String> {
             println!("Options:");
             println!("  -h, --help    Show this help message and exit");
             println!("      --remove  Interactively remove Crest Player and its data");
+            println!("      --storage Show application and downloaded-media storage usage");
             println!();
             println!("Run without an option to start Crest Player.");
             Ok(true)
         }
         [argument] if argument == "--remove" => uninstall::remove_crest_player().map(|_| true),
+        [argument] if argument == "--storage" => storage::display_storage().map(|_| true),
         _ => Err(format!(
             "unknown option or argument: {}\nRun 'crest-player --help' for usage.",
             arguments
