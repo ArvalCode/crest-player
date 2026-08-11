@@ -22,7 +22,8 @@ pub fn install() -> Result<(), String> {
     let quoted_executable = shell_single_quote(&executable.to_string_lossy());
     let launcher_contents = format!(
         "#!/bin/sh\n\napplication={quoted_executable}\nif command -v systemd-run >/dev/null 2>&1 \\\n+    && systemctl --user show-environment >/dev/null 2>&1; then\n    exec systemd-run --user --scope --quiet --unit=\"crest-player-$$\" \\\n+        --description=\"Crest Player\" \"$application\" \"$@\"\nfi\nexec \"$application\" \"$@\"\n"
-    );
+    )
+    .replace("\n+", "\n");
     std::fs::write(&launcher, launcher_contents)
         .map_err(|error| format!("could not write {}: {error}", launcher.display()))?;
     let mut permissions = std::fs::metadata(&launcher)
