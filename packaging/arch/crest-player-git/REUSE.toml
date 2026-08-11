@@ -4,6 +4,7 @@ version = 1
 path = [
     "PKGBUILD",
     ".SRCINFO",
+    ".gitignore",
     "REUSE.toml",
 ]
 SPDX-FileCopyrightText = "Arch Linux contributors"
