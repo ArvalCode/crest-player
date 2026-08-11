@@ -8,8 +8,8 @@ repository = "https://github.com/ArvalCode/crest-player"
 readme = "README.md"
 
 [dependencies]
-ratatui = "0.26"
-crossterm = "0.27"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
 
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 serde = { version = "1.0", features = ["derive"] }

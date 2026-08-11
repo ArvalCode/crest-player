@@ -1,5 +1,6 @@
+use crate::security::{external_command, sanitize_display_text_limited, valid_media_url};
 use std::collections::HashMap;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -63,8 +64,7 @@ impl Player {
         }
         // If path is a local file and exists, play directly
         // If path is in the library, use the actual file path
-        let play_path = if path.starts_with("http://")
-            || path.starts_with("https://")
+        let play_path = if valid_media_url(path)
             || (Path::new(path).exists()
                 && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false))
         {
@@ -83,7 +83,10 @@ impl Player {
             }
         } else {
             // Not a valid file or YouTube ID
-            self.status = format!("Invalid file or ID: {}", path);
+            self.status = format!(
+                "Invalid file or ID: {}",
+                sanitize_display_text_limited(path, 512)
+            );
             return;
         };
 
@@ -94,7 +97,7 @@ impl Player {
             self.last_temp_file = None;
         }
 
-        let child = Command::new("ffplay")
+        let child = external_command("ffplay")
             .args(["-nodisp", "-autoexit", &play_path])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -180,7 +183,7 @@ impl Player {
     }
     pub fn pause(&mut self) {
         if let Some(child) = &mut self.child {
-            let _ = Command::new("kill")
+            let _ = external_command("kill")
                 .arg("-STOP")
                 .arg(child.id().to_string())
                 .status();
@@ -192,7 +195,7 @@ impl Player {
     }
     pub fn resume(&mut self) {
         if let Some(child) = &mut self.child {
-            let _ = Command::new("kill")
+            let _ = external_command("kill")
                 .arg("-CONT")
                 .arg(child.id().to_string())
                 .status();
@@ -292,7 +295,7 @@ impl Player {
             return false;
         };
         let seek = format!("{:.3}", self.elapsed_before_start.as_secs_f64());
-        match Command::new("ffplay")
+        match external_command("ffplay")
             .args(["-ss", &seek, "-nodisp", "-autoexit", &path])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -354,7 +357,7 @@ impl Player {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let child = Command::new("ffplay")
+        let child = external_command("ffplay")
             .args([
                 "-ss",
                 &format!("{target:.3}"),
@@ -373,7 +376,7 @@ impl Player {
         self.elapsed_before_start = Duration::from_secs_f64(target);
         if was_paused {
             if let Some(child) = &self.child {
-                let _ = Command::new("kill")
+                let _ = external_command("kill")
                     .arg("-STOP")
                     .arg(child.id().to_string())
                     .status();

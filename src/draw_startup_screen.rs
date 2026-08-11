@@ -246,9 +246,9 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
             Constraint::Length(option_lines.len() as u16),
             Constraint::Min(1),
         ])
-        .split(f.size());
+        .split(f.area());
 
-    f.render_widget(block, f.size());
+    f.render_widget(block, f.area());
     let art_paragraph = Paragraph::new(art).alignment(Alignment::Center);
     f.render_widget(art_paragraph, layout[1]);
 
@@ -269,8 +269,8 @@ fn draw_wallpaper_home(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::White))
         .title("Crest Player");
-    let inner = outer.inner(frame.size());
-    frame.render_widget(outer, frame.size());
+    let inner = outer.inner(frame.area());
+    frame.render_widget(outer, frame.area());
 
     let layout = Layout::default()
         .direction(Direction::Vertical)

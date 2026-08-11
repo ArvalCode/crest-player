@@ -1,5 +1,6 @@
 use crate::idle_mode::{ColorPrecision, VideoRenderMode};
 use crate::lyrics::LyricLine;
+use crate::security::{read_file_limited, sanitize_display_text};
 use crate::wallpaper::HomeWallpaper;
 use dirs::audio_dir;
 use serde::{Deserialize, Serialize};
@@ -136,21 +137,23 @@ impl App {
     }
 
     pub fn remove_library_track(&mut self, path: &str) -> std::io::Result<()> {
-        match std::fs::remove_file(path) {
+        let path = validated_library_media_path(path)?;
+        let video_cache = validated_library_media_path(path.with_extension("crestvid"))?;
+        match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        let video_cache = std::path::Path::new(path).with_extension("crestvid");
         match std::fs::remove_file(video_cache) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
         self.library
-            .retain(|(_, library_path)| library_path != path);
-        self.library_paths.remove(path);
-        self.available_library_paths.remove(path);
+            .retain(|(_, library_path)| std::path::Path::new(library_path) != path);
+        let path = path.to_string_lossy();
+        self.library_paths.remove(path.as_ref());
+        self.available_library_paths.remove(path.as_ref());
         Ok(())
     }
 
@@ -180,7 +183,7 @@ impl App {
         let mut errors = Vec::new();
         for path in paths {
             if let Err(error) = self.remove_library_track(&path) {
-                errors.push(format!("{}: {error}", path));
+                errors.push(format!("{}: {error}", sanitize_display_text(&path)));
             }
         }
         errors
@@ -193,14 +196,42 @@ fn normalize_existing_path(path: String) -> String {
         .unwrap_or(path)
 }
 
+fn validated_library_media_path(
+    path: impl AsRef<std::path::Path>,
+) -> std::io::Result<std::path::PathBuf> {
+    let root = audio_dir()
+        .ok_or_else(|| std::io::Error::other("music directory is unavailable"))?
+        .canonicalize()?;
+    let candidate = path.as_ref();
+    let parent = candidate.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "media path has no parent")
+    })?;
+    if parent.canonicalize()? != root {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "refusing to delete media outside the Music directory",
+        ));
+    }
+    if candidate.exists() {
+        let canonical = candidate.canonicalize()?;
+        if canonical.parent() != Some(root.as_path()) || !canonical.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "refusing to delete an untrusted media path",
+            ));
+        }
+    }
+    Ok(candidate.to_path_buf())
+}
+
 fn settings_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|directory| directory.join("crest-player/settings.json"))
 }
 
 fn load_settings() -> PersistedSettings {
     settings_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .and_then(|path| read_file_limited(path, 1024 * 1024).ok())
+        .and_then(|contents| serde_json::from_slice(&contents).ok())
         .unwrap_or_default()
 }
 
@@ -242,7 +273,7 @@ pub fn save_library(library: &[(String, String)]) {
             path,
             library
                 .iter()
-                .map(|(t, p)| format!("{}|{}\n", t, p))
+                .map(|(t, p)| format!("{}|{}\n", sanitize_display_text(t).replace('|', "_"), p))
                 .collect::<String>(),
         );
     }
@@ -251,12 +282,16 @@ pub fn save_library(library: &[(String, String)]) {
 pub fn load_library() -> Vec<(String, String)> {
     if let Some(dir) = audio_dir() {
         let path = dir.join("ytmusic_library.csv");
-        if let Ok(data) = std::fs::read_to_string(path) {
-            return data
+        if let Ok(data) = read_file_limited(path, 16 * 1024 * 1024) {
+            return String::from_utf8_lossy(&data)
                 .lines()
                 .filter_map(|l| {
-                    l.split_once('|')
-                        .map(|(t, p)| (t.to_string(), normalize_existing_path(p.to_string())))
+                    l.split_once('|').map(|(t, p)| {
+                        (
+                            sanitize_display_text(t),
+                            normalize_existing_path(p.to_string()),
+                        )
+                    })
                 })
                 .collect();
         }

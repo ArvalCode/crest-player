@@ -1,5 +1,8 @@
+use crate::security::{
+    MAX_METADATA_BYTES, bounded_output, external_command, sanitize_display_text_limited,
+    valid_youtube_id,
+};
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
 
 pub struct Recommendation {
     pub title: String,
@@ -11,23 +14,25 @@ pub fn youtube_mix_recommendation(
     known_video_id: Option<&str>,
     excluded_video_ids: &[String],
 ) -> Result<Recommendation, String> {
-    let seed_id = match known_video_id {
+    let seed_id = match known_video_id.filter(|id| valid_youtube_id(id)) {
         Some(id) => id.to_string(),
         None => resolve_video_id(title)?,
     };
     let mix_url = format!("https://www.youtube.com/watch?v={seed_id}&list=RD{seed_id}");
-    let output = Command::new("yt-dlp")
-        .args([
-            "--flat-playlist",
-            "--playlist-items",
-            "2:25",
-            "--dump-json",
-            "--no-warnings",
-            &mix_url,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
+    let mut command = external_command("yt-dlp");
+    command.args([
+        "--socket-timeout",
+        "10",
+        "--retries",
+        "2",
+        "--flat-playlist",
+        "--playlist-items",
+        "2:25",
+        "--dump-json",
+        "--no-warnings",
+        &mix_url,
+    ]);
+    let output = bounded_output(command, MAX_METADATA_BYTES)
         .map_err(|error| format!("Unable to query YouTube Mix: {error}"))?;
     if !output.status.success() {
         return Err("YouTube Mix recommendation failed".to_string());
@@ -53,9 +58,10 @@ fn choose_recommendation(
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter_map(|item| {
             let id = item.get("id")?.as_str()?.to_string();
-            let title = item.get("title")?.as_str()?.to_string();
+            let title = sanitize_display_text_limited(item.get("title")?.as_str()?, 512);
             (id != seed_id
                 && !excluded.contains(id.as_str())
+                && valid_youtube_id(&id)
                 && !id.is_empty()
                 && !title.is_empty()
                 && seen.insert(id.clone()))
@@ -74,14 +80,21 @@ fn choose_recommendation(
 
 fn resolve_video_id(title: &str) -> Result<String, String> {
     let query = format!("ytsearch1:{title}");
-    let output = Command::new("yt-dlp")
-        .args(["--flat-playlist", "--print", "%(id)s", &query])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
+    let mut command = external_command("yt-dlp");
+    command.args([
+        "--socket-timeout",
+        "10",
+        "--retries",
+        "2",
+        "--flat-playlist",
+        "--print",
+        "%(id)s",
+        &query,
+    ]);
+    let output = bounded_output(command, 1024)
         .map_err(|error| format!("Unable to resolve recommendation seed: {error}"))?;
     let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if output.status.success() && !id.is_empty() {
+    if output.status.success() && valid_youtube_id(&id) {
         Ok(id)
     } else {
         Err("Unable to match this track on YouTube".to_string())
@@ -95,17 +108,18 @@ mod tests {
     #[test]
     fn recommendation_excludes_seed_history_and_duplicates() {
         let output = concat!(
-            r#"{"id":"seed","title":"Seed"}"#,
+            r#"{"id":"seed0000001","title":"Seed"}"#,
             "\n",
-            r#"{"id":"old","title":"Old"}"#,
+            r#"{"id":"old00000001","title":"Old"}"#,
             "\n",
-            r#"{"id":"new","title":"New"}"#,
+            r#"{"id":"new00000001","title":"New"}"#,
             "\n",
-            r#"{"id":"new","title":"Duplicate"}"#,
+            r#"{"id":"new00000001","title":"Duplicate"}"#,
             "\n",
         );
-        let recommendation = choose_recommendation(output, "seed", &["old".to_string()]).unwrap();
-        assert_eq!(recommendation.video_id, "new");
+        let recommendation =
+            choose_recommendation(output, "seed0000001", &["old00000001".to_string()]).unwrap();
+        assert_eq!(recommendation.video_id, "new00000001");
         assert_eq!(recommendation.title, "New");
     }
 }

@@ -1,4 +1,5 @@
 use crate::idle_mode::{ColorPrecision, VideoRenderMode};
+use crate::security::read_file_limited;
 use crate::video_screensaver::VideoFrame;
 use std::io;
 use std::path::PathBuf;
@@ -8,6 +9,7 @@ const LEGACY_FILE_MAGIC: &[u8; 4] = b"CWP1";
 const HEADER_LENGTH: usize = 10;
 const LEGACY_HEADER_LENGTH: usize = 9;
 const FILE_NAME: &str = "home-wallpaper.rgb";
+const MAX_WALLPAPER_BYTES: usize = 64 * 1024 * 1024 + HEADER_LENGTH;
 
 pub struct HomeWallpaper {
     pub frame: VideoFrame,
@@ -29,7 +31,7 @@ impl HomeWallpaper {
     }
 
     pub fn load() -> Option<Self> {
-        let bytes = std::fs::read(wallpaper_path()?).ok()?;
+        let bytes = read_file_limited(wallpaper_path()?, MAX_WALLPAPER_BYTES).ok()?;
         Self::decode(&bytes)
     }
 

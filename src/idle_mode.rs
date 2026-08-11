@@ -163,7 +163,7 @@ pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
         synced_lyrics,
     } = state;
     let has_synced_lyrics = synced_lyrics.is_some();
-    let area = frame.size();
+    let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().bg(Color::Black)),
         area,
@@ -210,11 +210,9 @@ pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
                 (VideoRenderMode::AsciiDetailed, Some(_)) => ascii_cell(top, bottom, x, y, true),
                 _ => ("▀", Style::default().fg(top).bg(bottom)),
             };
-            frame
-                .buffer_mut()
-                .get_mut(inner.x + x, inner.y + y)
-                .set_symbol(symbol)
-                .set_style(style);
+            if let Some(cell) = frame.buffer_mut().cell_mut((inner.x + x, inner.y + y)) {
+                cell.set_symbol(symbol).set_style(style);
+            }
         }
     }
 
@@ -321,11 +319,9 @@ pub fn draw_video_frame(
                 VideoRenderMode::AsciiDetailed => ascii_cell(top, bottom, x, y, true),
                 VideoRenderMode::ColorPixels => ("▀", Style::default().fg(top).bg(bottom)),
             };
-            frame
-                .buffer_mut()
-                .get_mut(area.x + x, area.y + y)
-                .set_symbol(symbol)
-                .set_style(style);
+            if let Some(cell) = frame.buffer_mut().cell_mut((area.x + x, area.y + y)) {
+                cell.set_symbol(symbol).set_style(style);
+            }
         }
     }
 }

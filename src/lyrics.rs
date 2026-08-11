@@ -1,7 +1,10 @@
+use crate::security::{
+    MAX_LYRICS_BYTES, MAX_METADATA_BYTES, bounded_output, external_command, read_response_limited,
+    sanitize_display_text_limited,
+};
 use ib_romaji::HepburnRomanizer;
 use serde::Deserialize;
 use serde_json::Value;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -37,8 +40,8 @@ pub fn fetch_lyrics(title: &str) -> Result<Lyrics, String> {
         return Err(format!("Lyrics service returned {}.", response.status()));
     }
 
-    let results: Vec<LyricsResult> = response
-        .json()
+    let response = read_response_limited(response, MAX_LYRICS_BYTES)?;
+    let results: Vec<LyricsResult> = serde_json::from_slice(&response)
         .map_err(|error| format!("Invalid lyrics response: {error}"))?;
     let result = results
         .into_iter()
@@ -86,21 +89,19 @@ fn fetch_embedded_lyrics(video_source: &str) -> Result<Lyrics, String> {
     }
     let (output, synced) = std::thread::scope(|scope| {
         let synced = scope.spawn(|| embedded_lyrics_are_synced(video_source));
-        let output = Command::new("ffmpeg")
-            .args([
-                "-loglevel",
-                "error",
-                "-i",
-                video_source,
-                "-map",
-                "0:s:0",
-                "-f",
-                "webvtt",
-                "pipe:1",
-            ])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
+        let mut command = external_command("ffmpeg");
+        command.args([
+            "-loglevel",
+            "error",
+            "-i",
+            video_source,
+            "-map",
+            "0:s:0",
+            "-f",
+            "webvtt",
+            "pipe:1",
+        ]);
+        let output = bounded_output(command, MAX_LYRICS_BYTES);
         (output, synced.join().unwrap_or(true))
     });
     let output = output.map_err(|error| format!("Could not read embedded lyrics: {error}"))?;
@@ -121,32 +122,38 @@ fn fetch_embedded_lyrics(video_source: &str) -> Result<Lyrics, String> {
 }
 
 fn embedded_lyrics_are_synced(video_source: &str) -> bool {
-    Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "s:0",
-            "-show_entries",
-            "stream_tags=CREST_SYNCED",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            video_source,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
+    let mut command = external_command("ffprobe");
+    command.args([
+        "-v",
+        "error",
+        "-select_streams",
+        "s:0",
+        "-show_entries",
+        "stream_tags=CREST_SYNCED",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        video_source,
+    ]);
+    bounded_output(command, 1024)
         .ok()
         .filter(|output| output.status.success())
         .is_none_or(|output| String::from_utf8_lossy(&output.stdout).trim() != "0")
 }
 
 fn fetch_video_captions(video_source: &str) -> Result<Lyrics, String> {
-    let output = Command::new("yt-dlp")
-        .args(["-J", "--playlist-items", "1", "--no-warnings", video_source])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
+    let mut command = external_command("yt-dlp");
+    command.args([
+        "--socket-timeout",
+        "10",
+        "--retries",
+        "2",
+        "-J",
+        "--playlist-items",
+        "1",
+        "--no-warnings",
+        video_source,
+    ]);
+    let output = bounded_output(command, MAX_METADATA_BYTES)
         .map_err(|error| format!("Could not inspect video captions: {error}"))?;
     if !output.status.success() {
         return Err("yt-dlp could not inspect video captions.".to_string());
@@ -167,13 +174,14 @@ fn fetch_video_captions(video_source: &str) -> Result<Lyrics, String> {
             .get("url")
             .and_then(Value::as_str)
             .ok_or_else(|| "Caption metadata did not contain a URL.".to_string())?;
-        reqwest::blocking::Client::new()
+        let response = reqwest::blocking::Client::new()
             .get(url)
             .timeout(Duration::from_secs(10))
             .send()
             .and_then(|response| response.error_for_status())
-            .and_then(|response| response.text())
-            .map_err(|error| format!("Could not download video captions: {error}"))?
+            .map_err(|error| format!("Could not download video captions: {error}"))?;
+        String::from_utf8(read_response_limited(response, MAX_LYRICS_BYTES)?)
+            .map_err(|error| format!("Video captions were not UTF-8: {error}"))?
     };
     let lines = parse_webvtt(&contents);
     if lines.is_empty() {
@@ -218,6 +226,9 @@ fn parse_webvtt(captions: &str) -> Vec<LyricLine> {
     let mut lines = Vec::new();
     let mut input = captions.lines().peekable();
     while let Some(line) = input.next() {
+        if lines.len() >= 10_000 {
+            break;
+        }
         let Some((start, _)) = line.split_once(" --> ") else {
             continue;
         };
@@ -272,9 +283,10 @@ fn parse_caption_timestamp(value: &str) -> Option<Duration> {
         ),
         _ => return None,
     };
-    Some(Duration::from_secs_f64(
-        hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds,
-    ))
+    let total = hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds;
+    (total.is_finite() && total >= 0.0)
+        .then(|| Duration::try_from_secs_f64(total).ok())
+        .flatten()
 }
 
 fn clean_caption_text(value: &str) -> String {
@@ -288,7 +300,7 @@ fn clean_caption_text(value: &str) -> String {
             _ => {}
         }
     }
-    output
+    sanitize_display_text_limited(&output, 4096)
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -306,7 +318,7 @@ fn parse_synced_lyrics(lyrics: &str) -> Vec<LyricLine> {
         .filter_map(|line| {
             let end = line.find(']')?;
             let timestamp = parse_timestamp(line.get(1..end)?)?;
-            let text = line.get(end + 1..)?.trim().to_string();
+            let text = sanitize_display_text_limited(line.get(end + 1..)?.trim(), 4096);
             if japanese_song && !text.chars().any(is_japanese) {
                 return None;
             }
@@ -320,6 +332,7 @@ fn parse_synced_lyrics(lyrics: &str) -> Vec<LyricLine> {
                 romaji,
             })
         })
+        .take(10_000)
         .collect()
 }
 
@@ -327,7 +340,10 @@ fn parse_timestamp(value: &str) -> Option<Duration> {
     let (minutes, seconds) = value.split_once(':')?;
     let minutes: u64 = minutes.parse().ok()?;
     let seconds: f64 = seconds.parse().ok()?;
-    Some(Duration::from_secs_f64(minutes as f64 * 60.0 + seconds))
+    let total = minutes as f64 * 60.0 + seconds;
+    (total.is_finite() && total >= 0.0)
+        .then(|| Duration::try_from_secs_f64(total).ok())
+        .flatten()
 }
 
 fn add_romaji(lyrics: &str, timestamps: bool) -> Vec<LyricLine> {
@@ -337,16 +353,18 @@ fn add_romaji(lyrics: &str, timestamps: bool) -> Vec<LyricLine> {
         .lines()
         .filter(|line| !japanese_song || line.chars().any(is_japanese))
         .map(|line| {
-            let romaji = line
+            let text = sanitize_display_text_limited(line, 4096);
+            let romaji = text
                 .chars()
                 .any(is_japanese)
-                .then(|| romanize(line, &romanizer));
+                .then(|| romanize(&text, &romanizer));
             LyricLine {
                 timestamp: timestamps.then(Duration::default),
-                text: line.to_string(),
+                text,
                 romaji,
             }
         })
+        .take(10_000)
         .collect()
 }
 
@@ -428,5 +446,14 @@ mod tests {
         assert_eq!(result[0].timestamp, Some(Duration::from_millis(1_250)));
         assert_eq!(result[0].text, "Hello & welcome");
         assert_eq!(result[1].text, "Next line");
+    }
+
+    #[test]
+    fn rejects_non_finite_timestamps_and_terminal_controls() {
+        assert!(parse_caption_timestamp("NaN").is_none());
+        assert!(parse_timestamp("01:NaN").is_none());
+        let result =
+            parse_webvtt("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nSafe\u{1b}]52;payload\u{7}\n");
+        assert_eq!(result[0].text, "Safe]52;payload");
     }
 }

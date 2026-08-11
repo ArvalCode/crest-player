@@ -7,6 +7,7 @@ mod lyrics;
 mod player;
 mod recommendations;
 mod search;
+mod security;
 mod ui_downloaded_only;
 mod ui_with_player;
 mod video_cache;
@@ -35,8 +36,10 @@ use ratatui::Terminal;
 use ratatui::prelude::CrosstermBackend;
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use search::{download_audio, search_youtube};
+use security::{
+    bounded_output, contained_media_path, external_command, valid_media_url, valid_youtube_id,
+};
 use std::io::{self, BufWriter, Write};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use ui_with_player::ui_with_player;
 use video_screensaver::VideoScreensaver;
@@ -147,6 +150,10 @@ fn queue_youtube_download(
     title: &str,
     video_id: &str,
 ) {
+    if !valid_youtube_id(video_id) {
+        app.error = Some("YouTube returned an invalid media identifier.".to_string());
+        return;
+    }
     let url = format!("https://www.youtube.com/watch?v={video_id}");
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -170,11 +177,19 @@ fn queue_youtube_download(
     let sender = sender.clone();
     let title = title.to_string();
     std::thread::spawn(move || {
-        let output = Command::new("yt-dlp")
-            .args(["--no-playlist", "-f", "bestaudio/best", "-g", &url])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
+        let mut command = external_command("yt-dlp");
+        command.args([
+            "--socket-timeout",
+            "10",
+            "--retries",
+            "2",
+            "--no-playlist",
+            "-f",
+            "bestaudio/best",
+            "-g",
+            &url,
+        ]);
+        let output = bounded_output(command, 64 * 1024);
         let playback_path = output
             .as_ref()
             .ok()
@@ -184,7 +199,7 @@ fn queue_youtube_download(
                     .next()
                     .map(str::to_string)
             })
-            .filter(|path| !path.trim().is_empty())
+            .filter(|path| valid_media_url(path.trim()))
             .unwrap_or_default();
         let success = output.as_ref().is_ok_and(|output| output.status.success())
             && !playback_path.is_empty();
@@ -246,9 +261,15 @@ fn queue_library_download(
     title: String,
     video_cache_plan: Option<(u16, u16, u16)>,
 ) {
-    let path = dirs::audio_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(format!("{}_ytmusic.mp3", title.replace('/', "_")));
+    let Some(directory) = dirs::audio_dir() else {
+        app.error = Some("The Music directory is unavailable.".to_string());
+        return;
+    };
+    let Ok(path) = contained_media_path(&directory, &title, "_ytmusic.mp3") else {
+        app.error =
+            Some("The download title could not be converted to a safe filename.".to_string());
+        return;
+    };
     let path_string = path.to_string_lossy().into_owned();
     app.start_download(path_string.clone(), title.clone());
     let sender = sender.clone();

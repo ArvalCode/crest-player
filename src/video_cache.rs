@@ -1,13 +1,18 @@
 use crate::lyrics::Lyrics;
+use crate::security::external_command;
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 const MAGIC: &[u8; 8] = b"CRESTV1\0";
 const DELTA_MAGIC: &[u8; 8] = b"CRESTV2\0";
+const MAX_CACHE_DIMENSION: u16 = 4096;
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COMPRESSED_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const MAX_FRAME_COUNT: u64 = 1_000_000;
 pub struct VideoCache {
     file: File,
     pub width: u16,
@@ -32,7 +37,7 @@ pub fn build_video_cache(
     fps: u16,
     lyrics: Option<&Lyrics>,
 ) -> io::Result<()> {
-    if width == 0 || height == 0 || fps == 0 {
+    if validate_video_parameters(width, height, fps).is_err() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid cache dimensions",
@@ -91,7 +96,7 @@ fn build_video_cache_inner(options: CacheBuildOptions<'_>) -> io::Result<()> {
     // V3 caches use a conventional inter-frame codec on disk. Ten-second GOPs
     // keep seeking bounded while the screensaver decodes ahead into its frame
     // ring before presentation. At 700 kbps, a four-minute cache is about 21 MB.
-    let mut command = Command::new("ffmpeg");
+    let mut command = external_command("ffmpeg");
     command.args([
         "-y",
         "-nostdin",
@@ -226,7 +231,15 @@ impl VideoCache {
         let height = read_u16(&mut file)?;
         let fps = read_u16(&mut file)?;
         let frame_count = read_u64(&mut file)?;
-        let mut frames = Vec::with_capacity(frame_count.min(1_000_000) as usize);
+        validate_video_parameters(width, height, fps)?;
+        if frame_count > MAX_FRAME_COUNT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cache contains too many frames",
+            ));
+        }
+        let file_length = file.metadata()?.len();
+        let mut frames = Vec::with_capacity(frame_count as usize);
         for _ in 0..frame_count {
             let keyframe = if delta_encoded {
                 let mut flag = [0];
@@ -236,9 +249,25 @@ impl VideoCache {
                 true
             };
             let offset = file.stream_position()?;
-            let length = read_u32(&mut file)? as i64;
+            let length = read_u32(&mut file)? as u64;
+            if length == 0 || length > MAX_COMPRESSED_FRAME_BYTES as u64 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "cache frame payload has an invalid size",
+                ));
+            }
+            let payload_end = offset
+                .checked_add(4)
+                .and_then(|position| position.checked_add(length))
+                .filter(|position| *position <= file_length)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "cache frame exceeds file bounds",
+                    )
+                })?;
             frames.push(CachedFrame { offset, keyframe });
-            file.seek(SeekFrom::Current(length))?;
+            file.seek(SeekFrom::Start(payload_end))?;
         }
         Ok(Self {
             file,
@@ -301,10 +330,39 @@ impl VideoCache {
         let offset = self.frames[index].offset;
         self.file.seek(SeekFrom::Start(offset))?;
         let length = read_u32(&mut self.file)? as usize;
+        if length == 0 || length > MAX_COMPRESSED_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cache frame payload has an invalid size",
+            ));
+        }
         let mut compressed = vec![0; length];
         self.file.read_exact(&mut compressed)?;
-        zstd::bulk::decompress(&compressed, self.width as usize * self.height as usize * 3)
+        zstd::bulk::decompress(&compressed, frame_size(self.width, self.height)?)
     }
+}
+
+fn validate_video_parameters(width: u16, height: u16, fps: u16) -> io::Result<()> {
+    if width == 0
+        || height == 0
+        || width > MAX_CACHE_DIMENSION
+        || height > MAX_CACHE_DIMENSION
+        || !(1..=120).contains(&fps)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache video parameters exceed safety limits",
+        ));
+    }
+    frame_size(width, height).map(|_| ())
+}
+
+fn frame_size(width: u16, height: u16) -> io::Result<usize> {
+    usize::from(width)
+        .checked_mul(usize::from(height))
+        .and_then(|pixels| pixels.checked_mul(3))
+        .filter(|bytes| *bytes <= MAX_FRAME_BYTES)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "cache frame is too large"))
 }
 
 fn read_u16(reader: &mut impl Read) -> io::Result<u16> {
@@ -327,7 +385,7 @@ fn read_u64(reader: &mut impl Read) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DELTA_MAGIC, MAGIC, VideoCache, build_video_cache};
+    use super::{DELTA_MAGIC, MAGIC, MAX_FRAME_COUNT, VideoCache, build_video_cache};
     use crate::lyrics::{LyricLine, Lyrics};
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -353,6 +411,48 @@ mod tests {
         assert_eq!(cache.frame_count(), 1);
         assert_eq!(cache.read_frame(0).unwrap(), vec![10, 20, 30]);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_oversized_dimensions_before_decompression() {
+        let path = std::env::temp_dir().join(format!(
+            "crest-oversized-cache-test-{}.crestvid",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(MAGIC).unwrap();
+        file.write_all(&u16::MAX.to_le_bytes()).unwrap();
+        file.write_all(&u16::MAX.to_le_bytes()).unwrap();
+        file.write_all(&60u16.to_le_bytes()).unwrap();
+        file.write_all(&0u64.to_le_bytes()).unwrap();
+        drop(file);
+        assert!(VideoCache::open(&path).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_excessive_frame_counts_and_truncated_payloads() {
+        for (name, frame_count, payload_length) in [
+            ("count", MAX_FRAME_COUNT + 1, None),
+            ("payload", 1, Some(1024u32)),
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "crest-{name}-cache-test-{}.crestvid",
+                std::process::id()
+            ));
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(MAGIC).unwrap();
+            file.write_all(&1u16.to_le_bytes()).unwrap();
+            file.write_all(&1u16.to_le_bytes()).unwrap();
+            file.write_all(&15u16.to_le_bytes()).unwrap();
+            file.write_all(&frame_count.to_le_bytes()).unwrap();
+            if let Some(length) = payload_length {
+                file.write_all(&length.to_le_bytes()).unwrap();
+            }
+            drop(file);
+            assert!(VideoCache::open(&path).is_err());
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

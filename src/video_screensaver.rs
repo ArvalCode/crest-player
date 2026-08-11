@@ -1,8 +1,9 @@
+use crate::security::{bounded_output, external_command, valid_media_url};
 use crate::video_cache::VideoCache;
 use std::{
     collections::VecDeque,
     io::Read,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -267,7 +268,13 @@ impl VideoScreensaver {
             fps,
             hardware_acceleration,
         } = plan;
-        let frame_size = width as usize * height as usize * 3;
+        let Some(frame_size) = usize::from(width)
+            .checked_mul(usize::from(height))
+            .and_then(|pixels| pixels.checked_mul(3))
+            .filter(|bytes| *bytes <= MAX_BUFFER_BYTES)
+        else {
+            return;
+        };
         let buffer_limit = buffer_limit(width, height, fps);
         // The bounded channel is the only frame queue. The consumer retains at
         // most one future frame while dropping obsolete frames against audio time.
@@ -307,17 +314,19 @@ impl VideoScreensaver {
             let direct_url = if std::path::Path::new(worker_source.as_ref()).is_file() {
                 worker_source.clone()
             } else {
-                let resolved = Command::new("yt-dlp")
-                    .args([
+                let mut command = external_command("yt-dlp");
+                command.args([
+                        "--socket-timeout",
+                        "10",
+                        "--retries",
+                        "2",
                         "--no-playlist",
                         "-g",
                         "-f",
                         "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
                         worker_source.as_ref(),
-                    ])
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null())
-                    .output();
+                    ]);
+                let resolved = bounded_output(command, 64 * 1024);
                 if worker_stop.load(Ordering::Relaxed) {
                     return;
                 }
@@ -335,6 +344,11 @@ impl VideoScreensaver {
             if direct_url.is_empty() {
                 return;
             }
+            if !std::path::Path::new(worker_source.as_ref()).is_file()
+                && !valid_media_url(direct_url.as_ref())
+            {
+                return;
+            }
 
             let filter = format!(
                 "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
@@ -349,7 +363,7 @@ impl VideoScreensaver {
             };
             for &accelerated in attempts {
                 let seek = format!("{:.3}", synchronized_position.as_secs_f64());
-                let mut command = Command::new("ffmpeg");
+                let mut command = external_command("ffmpeg");
                 command.args([
                     "-nostdin",
                     "-loglevel",

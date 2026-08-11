@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
-    let size = f.size();
+    let size = f.area();
     let column_widths = if app.lyrics_enabled {
         vec![
             Constraint::Percentage(40),
