@@ -194,6 +194,7 @@ crest-player --help
 | Option | Action |
 | --- | --- |
 | `-h`, `--help` | Display command-line help and exit |
+| `--install-desktop` | Add or refresh the per-user Linux application launcher and icon |
 | `--remove` | Interactively remove Crest Player and its data |
 | `--storage` | Display application, downloaded-music, and video-cache storage usage |
 
@@ -266,6 +267,8 @@ and settings, or remove everything. It explains the selected scope and requires
 typing `REMOVE` before changing anything. Package installations are removed
 through `pacman`; on Linux, choices that remove application files require
 `sudo`, while personal media and configuration cleanup runs as the current user.
+Application removal also deletes the per-user launcher, desktop entry, and icon
+created by `--install-desktop`.
 After successful removal, it reports the total amount of Crest Player storage
 removed in MiB.
 The command refuses to uninstall when run from a development checkout or an

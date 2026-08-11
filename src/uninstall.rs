@@ -66,6 +66,7 @@ pub fn remove_crest_player() -> Result<(), String> {
     }
     if let Some(installation) = installation {
         installation.remove()?;
+        crate::desktop_integration::remove()?;
     }
     println!("{} removed successfully.", choice.label());
     println!(
@@ -128,8 +129,9 @@ fn estimated_removal_bytes(choice: RemovalChoice, installation: Option<&Installa
 }
 
 fn installation_size(installation: &Installation) -> u64 {
-    installation
-        .installed_paths()
+    let mut paths = installation.installed_paths();
+    paths.extend(crate::desktop_integration::paths());
+    paths
         .iter()
         .filter_map(|path| std::fs::metadata(path).ok())
         .filter(|metadata| metadata.is_file())

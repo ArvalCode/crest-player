@@ -1,4 +1,5 @@
 mod app;
+mod desktop_integration;
 mod download_commands;
 mod download_queue_ui;
 mod draw_startup_screen;
@@ -343,12 +344,16 @@ fn handle_command_line() -> Result<bool, String> {
             println!("  crest-player [OPTION]");
             println!();
             println!("Options:");
-            println!("  -h, --help    Show this help message and exit");
-            println!("      --remove  Interactively remove Crest Player and its data");
-            println!("      --storage Show application and downloaded-media storage usage");
+            println!("  -h, --help         Show this help message and exit");
+            println!("      --install-desktop  Add Crest Player to the application launcher");
+            println!("      --remove       Interactively remove Crest Player and its data");
+            println!("      --storage      Show application and downloaded-media storage usage");
             println!();
             println!("Run without an option to start Crest Player.");
             Ok(true)
+        }
+        [argument] if argument == "--install-desktop" => {
+            desktop_integration::install().map(|_| true)
         }
         [argument] if argument == "--remove" => uninstall::remove_crest_player().map(|_| true),
         [argument] if argument == "--storage" => storage::display_storage().map(|_| true),
