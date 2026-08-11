@@ -136,6 +136,7 @@ struct DownloadFinished {
     queue_path: String,
     playback_path: String,
     youtube_url: String,
+    duration: Option<Duration>,
     autoplay: bool,
     success: bool,
 }
@@ -189,20 +190,30 @@ fn queue_youtube_download(
             "--no-playlist",
             "-f",
             "bestaudio/best",
+            "--print",
+            "%(duration)s",
             "-g",
             &url,
         ]);
         let output = bounded_output(command, 64 * 1024);
-        let playback_path = output
+        let output_lines: Vec<String> = output
             .as_ref()
-            .ok()
-            .and_then(|output| {
+            .map(|output| {
                 String::from_utf8_lossy(&output.stdout)
                     .lines()
-                    .next()
                     .map(str::to_string)
+                    .collect()
             })
-            .filter(|path| valid_media_url(path.trim()))
+            .unwrap_or_default();
+        let duration = output_lines
+            .first()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(Duration::from_secs_f64);
+        let playback_path = output_lines
+            .iter()
+            .find(|path| valid_media_url(path.trim()))
+            .cloned()
             .unwrap_or_default();
         let success = output.as_ref().is_ok_and(|output| output.status.success())
             && !playback_path.is_empty();
@@ -212,6 +223,7 @@ fn queue_youtube_download(
             queue_path,
             playback_path,
             youtube_url: url,
+            duration,
             autoplay,
             success,
         });
@@ -241,10 +253,16 @@ fn process_download_completions(
             {
                 player.queue.remove(index);
                 player.register_video_source(&download.playback_path, &download.youtube_url);
+                if let Some(duration) = download.duration {
+                    player.register_stream_duration(&download.playback_path, duration);
+                }
                 player.play(&download.playback_path, &download.title);
                 video_screensaver.restart();
             } else if download.success {
                 player.register_video_source(&download.playback_path, &download.youtube_url);
+                if let Some(duration) = download.duration {
+                    player.register_stream_duration(&download.playback_path, duration);
+                }
                 player.queue[index] = (download.title, download.playback_path);
             } else {
                 player.queue.remove(index);

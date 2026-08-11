@@ -15,6 +15,7 @@ pub struct Player {
     current_path: Option<String>,
     last_finished_title: Option<String>,
     video_sources: HashMap<String, Arc<str>>,
+    stream_durations: HashMap<String, Duration>,
     audio_retry_at: Option<Instant>,
 }
 
@@ -31,6 +32,7 @@ impl Player {
             current_path: None,
             last_finished_title: None,
             video_sources: HashMap::new(),
+            stream_durations: HashMap::new(),
             audio_retry_at: None,
         }
     }
@@ -122,6 +124,11 @@ impl Player {
             .insert(audio_path.to_string(), Arc::from(youtube_url));
     }
 
+    pub fn register_stream_duration(&mut self, audio_path: &str, duration: Duration) {
+        self.stream_durations
+            .insert(audio_path.to_string(), duration);
+    }
+
     pub fn video_source(&self) -> Option<Arc<str>> {
         let title = self.title.as_ref()?;
         Some(
@@ -147,9 +154,11 @@ impl Player {
         if let Some(audio_path) = self.last_temp_file.take() {
             let _ = std::fs::remove_file(&audio_path);
             self.video_sources.remove(&audio_path);
+            self.stream_durations.remove(&audio_path);
         }
         for (_, path) in self.queue.clone() {
             self.video_sources.remove(&path);
+            self.stream_durations.remove(&path);
             if path.contains("ytmusic_play_") {
                 let _ = std::fs::remove_file(&path);
             }
@@ -241,12 +250,13 @@ impl Player {
         use std::fs;
         if let Some(child) = &mut self.child {
             match child.try_wait() {
-                Ok(Some(exit_status)) if exit_status.success() => {
+                Ok(Some(exit_status)) if exit_status.success() && self.reached_expected_end() => {
                     self.child = None;
                     self.status = "Stopped".to_string();
                     self.last_finished_title = self.title.take();
                     if let Some(path) = self.current_path.take() {
                         self.video_sources.remove(&path);
+                        self.stream_durations.remove(&path);
                     }
                     self.playback_started = None;
                     self.elapsed_before_start = Duration::default();
@@ -281,6 +291,21 @@ impl Player {
                 false
             }
         }
+    }
+
+    fn reached_expected_end(&self) -> bool {
+        let Some(expected) = self
+            .current_path
+            .as_ref()
+            .and_then(|path| self.stream_durations.get(path))
+        else {
+            // Local files and older queue entries have no separately supplied
+            // duration; ffplay's successful exit remains authoritative for them.
+            return true;
+        };
+
+        // Container timestamps and wall-clock playback can differ slightly.
+        self.position() + Duration::from_secs(2) >= *expected
     }
 
     fn retry_audio_if_due(&mut self) -> bool {
@@ -416,6 +441,30 @@ mod tests {
         assert_eq!(player.title.as_deref(), Some("Interrupted"));
         assert_eq!(player.queue.len(), 1);
         assert!(player.audio_retry_at.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clean_early_stream_exit_reconnects_instead_of_skipping() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let mut player = Player::new();
+        player.child = Some(Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap());
+        player.title = Some("Interrupted stream".to_string());
+        player.current_path = Some("https://media.example/audio".to_string());
+        player.status = "Playing".to_string();
+        player.playback_started = Some(Instant::now());
+        player.register_stream_duration("https://media.example/audio", Duration::from_secs(180));
+        player
+            .queue
+            .push(("Next".to_string(), "next.mp3".to_string()));
+        std::thread::sleep(Duration::from_millis(20));
+
+        assert!(player.is_playing());
+        assert_eq!(player.status, "Reconnecting audio...");
+        assert_eq!(player.title.as_deref(), Some("Interrupted stream"));
+        assert_eq!(player.queue.len(), 1);
     }
 
     #[test]
