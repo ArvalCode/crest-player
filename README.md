@@ -106,28 +106,37 @@ all affect smoothness. Audio stays synchronized when late video frames are
 dropped. A GPU-accelerated terminal such as [Kitty](https://sw.kovidgoyal.net/kitty/)
 is recommended.
 
-## Active Video CPU Benchmark
+## Four-Scenario CPU and GPU Benchmark
 
-Measured on an **Intel Core Ultra 9 386H** with 16 logical CPUs using a release
-build, 80×24 terminal, ASCII Detailed, High color precision, 60 FPS, hardware
-acceleration, and autoplay. Results were rerun on August 10, 2026, average 30
-samples taken 750 ms apart, and include all media child processes. The video
-overlay remained active throughout both runs, including decode-ahead,
-audio-clock scheduling, ASCII conversion, synchronized lyrics, and terminal
-rendering. Here, 100% equals one fully occupied logical CPU.
+Measured August 11, 2026 on an **Intel Core Ultra 9 386H** with 16 logical CPUs
+and integrated **Intel Panther Lake Xe graphics**. A release build ran in a
+dedicated 80×24 Kitty window using ASCII Detailed, High color precision, fixed
+60 FPS, hardware acceleration enabled, lyrics disabled, and autoplay disabled.
+Each result averages 20 one-second steady-state samples after a 12-second
+warm-up. Audio-only runs stayed on Home with the video screensaver disabled;
+audio+video runs kept the active video view visible for the entire sample.
 
-| Playback mode | Crest Player | `ffplay` | `ffmpeg` | `yt-dlp` | Combined average | Combined peak | Average total capacity | Peak total capacity |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Downloaded MP3 + 8.6 MB `.crestvid` | 1.18% | 1.01% | 22.25% | 0.00% | **24.44%** | 28.92% | **1.53%** | 1.81% |
-| Streamed song + live video | 1.01% | 1.05% | 18.13% | 6.44% | **26.63%** | 115.72% | **1.66%** | 7.23% |
+CPU figures include Crest Player and its `ffplay`, `ffmpeg`, and `yt-dlp`
+descendants. CPU 100% means one fully occupied logical CPU. **Full CPU** divides
+the combined value by all 16 logical CPUs. GPU figures are the sum of Xe render,
+video, video-enhance, blitter, and compute engine busy percentages reported by
+`gputop` for the dedicated Kitty window and Crest Player media processes; this
+is an aggregate engine-utilization value, not percent of total system GPU power.
 
-Downloaded playback used **Liza – PARALLEL feat. 7** and its 8.6 MB cache;
-streaming used **Daft Punk – One More Time** with live video processing.
-Downloaded video averaged **24.44% of one core** (**1.53%** of the full CPU),
-while streamed video averaged **26.63% of one core** (**1.66%** overall). The
-streaming peak was a brief URL-resolution and prebuffering burst, not sustained
-load. GPU usage was not measured; results vary by terminal, network, settings,
-and FFmpeg build.
+| Scenario | Crest Player CPU | `ffplay` CPU | `ffmpeg` CPU | `yt-dlp` CPU | Combined CPU avg | Combined CPU peak | Full CPU avg | GPU engine avg | GPU engine peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Downloaded audio only | 1.25% | 1.30% | 0.00% | 0.00% | **2.55%** | 4.00% | **0.16%** | 4.85% | 12.20% |
+| Streamed audio only | 1.40% | 1.55% | 0.00% | 0.00% | **2.95%** | 4.00% | **0.18%** | 4.17% | 10.60% |
+| Downloaded audio + cached video | 2.30% | 1.55% | 15.85% | 0.00% | **19.70%** | 22.00% | **1.23%** | 4.41% | 6.60% |
+| Streamed audio + live video | 2.20% | 2.20% | 62.00% | 0.00% | **66.40%** | 85.00% | **4.15%** | 4.13% | 12.50% |
+
+Downloaded runs used **Liza – PARALLEL feat. 7** with its 8.6 MB `.crestvid`
+cache. The live search selected **IZA – Brisa** for both streamed runs. `yt-dlp`
+completed URL resolution before the steady-state sample window, so its measured
+CPU is zero; startup/search bursts are intentionally excluded.
+
+GPU results include terminal rendering and vary with terminal, background
+activity, drivers, and FFmpeg build.
 
 ## Controls
 
