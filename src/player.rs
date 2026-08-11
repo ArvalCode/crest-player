@@ -14,6 +14,7 @@ pub struct Player {
     current_path: Option<String>,
     last_finished_title: Option<String>,
     video_sources: HashMap<String, Arc<str>>,
+    audio_retry_at: Option<Instant>,
 }
 
 impl Player {
@@ -29,6 +30,7 @@ impl Player {
             current_path: None,
             last_finished_title: None,
             video_sources: HashMap::new(),
+            audio_retry_at: None,
         }
     }
 
@@ -106,6 +108,7 @@ impl Player {
         self.current_path = Some(play_path);
         self.title = Some(title.to_string());
         self.last_finished_title = None;
+        self.audio_retry_at = None;
         self.status = "Playing".to_string();
         self.elapsed_before_start = Duration::default();
         self.playback_started = Some(Instant::now());
@@ -208,6 +211,7 @@ impl Player {
         self.playback_started = None;
         self.elapsed_before_start = Duration::default();
         self.last_finished_title = None;
+        self.audio_retry_at = None;
         // Do not clear the queue here; only clear on quit
     }
 
@@ -234,7 +238,7 @@ impl Player {
         use std::fs;
         if let Some(child) = &mut self.child {
             match child.try_wait() {
-                Ok(Some(_)) => {
+                Ok(Some(exit_status)) if exit_status.success() => {
                     self.child = None;
                     self.status = "Stopped".to_string();
                     self.last_finished_title = self.title.take();
@@ -253,17 +257,61 @@ impl Player {
                     }
                     self.advance_queue()
                 }
+                Ok(Some(_)) | Err(_) => {
+                    self.child = None;
+                    if let Some(started) = self.playback_started.take() {
+                        self.elapsed_before_start += started.elapsed();
+                    }
+                    self.status = "Reconnecting audio...".to_string();
+                    self.audio_retry_at = Some(Instant::now() + Duration::from_secs(2));
+                    true
+                }
                 // The process is still running, but playback state did not change.
                 Ok(None) => false,
-                Err(_) => false,
             }
         } else {
-            if self.status != "Downloading..." {
+            if self.audio_retry_at.is_some() {
+                self.retry_audio_if_due()
+            } else if self.status != "Downloading..." {
                 self.advance_queue()
             } else {
                 false
             }
         }
+    }
+
+    fn retry_audio_if_due(&mut self) -> bool {
+        let Some(retry_at) = self.audio_retry_at else {
+            return false;
+        };
+        if Instant::now() < retry_at {
+            return false;
+        }
+        let (Some(path), Some(title)) = (self.current_path.clone(), self.title.clone()) else {
+            self.audio_retry_at = None;
+            return false;
+        };
+        let seek = format!("{:.3}", self.elapsed_before_start.as_secs_f64());
+        match Command::new("ffplay")
+            .args(["-ss", &seek, "-nodisp", "-autoexit", &path])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                self.child = Some(child);
+                self.title = Some(title);
+                self.status = "Playing".to_string();
+                self.playback_started = Some(Instant::now());
+                self.audio_retry_at = None;
+            }
+            Err(_) => {
+                self.status = "Reconnecting audio...".to_string();
+                self.audio_retry_at = Some(Instant::now() + Duration::from_secs(2));
+            }
+        }
+        true
     }
 
     fn advance_queue(&mut self) -> bool {
@@ -342,6 +390,30 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::Player;
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_audio_process_reconnects_instead_of_skipping() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let mut player = Player::new();
+        player.child = Some(Command::new("sh").args(["-c", "exit 1"]).spawn().unwrap());
+        player.title = Some("Interrupted".to_string());
+        player.current_path = Some("interrupted.mp3".to_string());
+        player.status = "Playing".to_string();
+        player.playback_started = Some(Instant::now());
+        player
+            .queue
+            .push(("Next".to_string(), "next.mp3".to_string()));
+        std::thread::sleep(Duration::from_millis(20));
+
+        assert!(player.is_playing());
+        assert_eq!(player.status, "Reconnecting audio...");
+        assert_eq!(player.title.as_deref(), Some("Interrupted"));
+        assert_eq!(player.queue.len(), 1);
+        assert!(player.audio_retry_at.is_some());
+    }
 
     #[test]
     fn idle_player_consumes_the_next_queue_entry() {
