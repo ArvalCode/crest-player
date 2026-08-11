@@ -1,4 +1,4 @@
-use crate::app::{App, DownloadState};
+use crate::app::App;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -11,14 +11,9 @@ pub fn render_download_queue(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app
         .downloads
         .iter()
-        .filter(|download| download.state == DownloadState::Downloading)
         .rev()
         .map(|download| {
-            let (label, color) = match download.state {
-                DownloadState::Downloading => ("Downloading…", Color::Yellow),
-                DownloadState::Finished => ("Finished", Color::Green),
-                DownloadState::Failed => ("Failed", Color::Red),
-            };
+            let (label, color) = ("Downloading…", Color::Yellow);
             Line::from(vec![
                 Span::raw(shorten(&download.title, 22)),
                 Span::raw("  "),

@@ -43,16 +43,16 @@ pub fn build_video_cache(
     if let Some(lyrics) = lyrics {
         std::fs::write(&lyrics_path, lyrics_as_webvtt(lyrics))?;
     }
-    let result = build_video_cache_inner(
+    let result = build_video_cache_inner(CacheBuildOptions {
         video_path,
         cache_path,
-        &temporary_path,
+        temporary_path: &temporary_path,
         width,
         height,
         fps,
-        lyrics.map(|_| lyrics_path.as_str()),
-        lyrics.map(|lyrics| lyrics.synced),
-    );
+        lyrics_path: lyrics.map(|_| lyrics_path.as_str()),
+        lyrics_synced: lyrics.map(|lyrics| lyrics.synced),
+    });
     let _ = std::fs::remove_file(&lyrics_path);
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary_path);
@@ -61,16 +61,28 @@ pub fn build_video_cache(
     result
 }
 
-fn build_video_cache_inner(
-    video_path: &str,
-    cache_path: &str,
-    temporary_path: &str,
+struct CacheBuildOptions<'a> {
+    video_path: &'a str,
+    cache_path: &'a str,
+    temporary_path: &'a str,
     width: u16,
     height: u16,
     fps: u16,
-    lyrics_path: Option<&str>,
+    lyrics_path: Option<&'a str>,
     lyrics_synced: Option<bool>,
-) -> io::Result<()> {
+}
+
+fn build_video_cache_inner(options: CacheBuildOptions<'_>) -> io::Result<()> {
+    let CacheBuildOptions {
+        video_path,
+        cache_path,
+        temporary_path,
+        width,
+        height,
+        fps,
+        lyrics_path,
+        lyrics_synced,
+    } = options;
     let filter = format!(
         "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
     );

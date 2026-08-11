@@ -5,7 +5,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Rect},
     style::{Color, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Borders, Paragraph},
 };
 
@@ -191,39 +191,32 @@ pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
     };
 
     let seconds = position.as_secs_f32();
-    let render_map = video_frame.map(|video| RenderMap::new(video, inner));
-    let mut lines = Vec::with_capacity(inner.height as usize);
     for y in 0..inner.height {
-        let mut spans = Vec::with_capacity(inner.width as usize);
         for x in 0..inner.width {
             let top = video_frame
-                .and_then(|video| {
-                    render_map
-                        .as_ref()
-                        .and_then(|map| map.color(video, x, y.saturating_mul(2)))
-                })
+                .and_then(|video| video_color(video, inner, x, y.saturating_mul(2)))
                 .unwrap_or_else(|| pixel_color(x, y.saturating_mul(2), inner, seconds));
             let bottom = video_frame
                 .and_then(|video| {
-                    render_map
-                        .as_ref()
-                        .and_then(|map| map.color(video, x, y.saturating_mul(2).saturating_add(1)))
+                    video_color(video, inner, x, y.saturating_mul(2).saturating_add(1))
                 })
                 .unwrap_or_else(|| {
                     pixel_color(x, y.saturating_mul(2).saturating_add(1), inner, seconds)
                 });
             let top = color_precision.apply(top);
             let bottom = color_precision.apply(bottom);
-            let span = match (render_mode, video_frame) {
-                (VideoRenderMode::AsciiFast, Some(_)) => ascii_span(top, bottom, x, y, false),
-                (VideoRenderMode::AsciiDetailed, Some(_)) => ascii_span(top, bottom, x, y, true),
-                _ => Span::styled("▀", Style::default().fg(top).bg(bottom)),
+            let (symbol, style) = match (render_mode, video_frame) {
+                (VideoRenderMode::AsciiFast, Some(_)) => ascii_cell(top, bottom, x, y, false),
+                (VideoRenderMode::AsciiDetailed, Some(_)) => ascii_cell(top, bottom, x, y, true),
+                _ => ("▀", Style::default().fg(top).bg(bottom)),
             };
-            spans.push(span);
+            frame
+                .buffer_mut()
+                .get_mut(inner.x + x, inner.y + y)
+                .set_symbol(symbol)
+                .set_style(style);
         }
-        lines.push(Line::from(spans));
     }
-    frame.render_widget(Paragraph::new(lines), inner);
 
     // Lyrics are overlaid instead of taking layout space, preserving the video's
     // terminal-cell resolution and aspect ratio.
@@ -316,30 +309,25 @@ pub fn draw_video_frame(
     render_mode: VideoRenderMode,
     color_precision: ColorPrecision,
 ) {
-    let render_map = RenderMap::new(video, area);
-    let mut lines = Vec::with_capacity(area.height as usize);
     for y in 0..area.height {
-        let mut spans = Vec::with_capacity(area.width as usize);
         for x in 0..area.width {
-            let top = render_map
-                .color(video, x, y.saturating_mul(2))
-                .unwrap_or(Color::Black);
-            let bottom = render_map
-                .color(video, x, y.saturating_mul(2).saturating_add(1))
+            let top = video_color(video, area, x, y.saturating_mul(2)).unwrap_or(Color::Black);
+            let bottom = video_color(video, area, x, y.saturating_mul(2).saturating_add(1))
                 .unwrap_or(Color::Black);
             let top = color_precision.apply(top);
             let bottom = color_precision.apply(bottom);
-            spans.push(match render_mode {
-                VideoRenderMode::AsciiFast => ascii_span(top, bottom, x, y, false),
-                VideoRenderMode::AsciiDetailed => ascii_span(top, bottom, x, y, true),
-                VideoRenderMode::ColorPixels => {
-                    Span::styled("▀", Style::default().fg(top).bg(bottom))
-                }
-            });
+            let (symbol, style) = match render_mode {
+                VideoRenderMode::AsciiFast => ascii_cell(top, bottom, x, y, false),
+                VideoRenderMode::AsciiDetailed => ascii_cell(top, bottom, x, y, true),
+                VideoRenderMode::ColorPixels => ("▀", Style::default().fg(top).bg(bottom)),
+            };
+            frame
+                .buffer_mut()
+                .get_mut(area.x + x, area.y + y)
+                .set_symbol(symbol)
+                .set_style(style);
         }
-        lines.push(Line::from(spans));
     }
-    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn blend(top: Color, bottom: Color) -> Color {
@@ -353,7 +341,7 @@ fn blend(top: Color, bottom: Color) -> Color {
     }
 }
 
-fn ascii_span(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> Span<'static> {
+fn ascii_cell(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> (&'static str, Style) {
     const FAST_RAMP: &[u8] = b" .,:;irsXA253hMHGS#9B&@";
     const DETAILED_RAMP: &[u8] =
         br#" .`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"#;
@@ -368,7 +356,7 @@ fn ascii_span(top: Color, bottom: Color, x: u16, y: u16, detailed: bool) -> Span
     };
     let index = luminance as usize * (ramp.len() - 1) / 255;
     let symbol = std::str::from_utf8(&ramp[index..index + 1]).unwrap_or(" ");
-    Span::styled(symbol, Style::default().fg(color).bg(Color::Black))
+    (symbol, Style::default().fg(color).bg(Color::Black))
 }
 
 fn luminance(color: Color) -> u8 {
@@ -379,34 +367,16 @@ fn luminance(color: Color) -> u8 {
     luminance as u8
 }
 
-struct RenderMap {
-    x: Vec<usize>,
-    y: Vec<usize>,
-}
-
-impl RenderMap {
-    fn new(frame: &VideoFrame, area: Rect) -> Self {
-        let target_width = area.width as usize;
-        let target_height = area.height.saturating_mul(2) as usize;
-        let x = (0..target_width)
-            .map(|value| value * frame.width as usize / target_width.max(1))
-            .collect();
-        let y = (0..target_height)
-            .map(|value| value * frame.height as usize / target_height.max(1))
-            .collect();
-        Self { x, y }
-    }
-
-    fn color(&self, frame: &VideoFrame, x: u16, y: u16) -> Option<Color> {
-        let source_x = *self.x.get(x as usize)?;
-        let source_y = *self.y.get(y as usize)?;
-        let index = (source_y * frame.width as usize + source_x) * 3;
-        Some(Color::Rgb(
-            *frame.pixels.get(index)?,
-            *frame.pixels.get(index + 1)?,
-            *frame.pixels.get(index + 2)?,
-        ))
-    }
+fn video_color(frame: &VideoFrame, area: Rect, x: u16, y: u16) -> Option<Color> {
+    let source_x = x as usize * frame.width as usize / area.width.max(1) as usize;
+    let target_height = area.height.saturating_mul(2).max(1) as usize;
+    let source_y = y as usize * frame.height as usize / target_height;
+    let index = (source_y * frame.width as usize + source_x) * 3;
+    Some(Color::Rgb(
+        *frame.pixels.get(index)?,
+        *frame.pixels.get(index + 1)?,
+        *frame.pixels.get(index + 2)?,
+    ))
 }
 
 fn inset(area: Rect, margin: u16) -> Rect {

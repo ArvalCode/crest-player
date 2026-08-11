@@ -5,17 +5,9 @@ use dirs::audio_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DownloadState {
-    Downloading,
-    Finished,
-    Failed,
-}
-
 pub struct DownloadJob {
     pub path: String,
     pub title: String,
-    pub state: DownloadState,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,6 +65,7 @@ pub struct App {
     pub hardware_acceleration_enabled: bool,
     pub autoplay_enabled: bool,
     pub downloads: Vec<DownloadJob>,
+    cancelled_downloads: HashSet<String>,
     pub home_wallpaper: Option<HomeWallpaper>,
 }
 
@@ -122,6 +115,7 @@ impl App {
             hardware_acceleration_enabled: settings.hardware_acceleration_enabled,
             autoplay_enabled: settings.autoplay_enabled,
             downloads: Vec::new(),
+            cancelled_downloads: HashSet::new(),
             home_wallpaper: HomeWallpaper::load(),
         }
     }
@@ -161,28 +155,23 @@ impl App {
     }
 
     pub fn start_download(&mut self, path: String, title: String) {
-        self.downloads.push(DownloadJob {
-            path,
-            title,
-            state: DownloadState::Downloading,
-        });
+        self.downloads.push(DownloadJob { path, title });
     }
 
-    pub fn finish_download(&mut self, path: &str, title: String, success: bool) {
-        if let Some(job) = self.downloads.iter_mut().find(|job| job.path == path) {
-            job.title = title;
-            job.state = if success {
-                DownloadState::Finished
-            } else {
-                DownloadState::Failed
-            };
-        }
+    /// Remove a completed job and report whether cleanup cancelled it.
+    pub fn finish_download(&mut self, path: &str) -> bool {
+        self.downloads.retain(|job| job.path != path);
+        self.cancelled_downloads.remove(path)
     }
 
     pub fn has_active_downloads(&self) -> bool {
-        self.downloads
-            .iter()
-            .any(|job| job.state == DownloadState::Downloading)
+        !self.downloads.is_empty()
+    }
+
+    pub fn cancel_active_downloads(&mut self) {
+        self.cancelled_downloads
+            .extend(self.downloads.iter().map(|job| job.path.clone()));
+        self.downloads.clear();
     }
 
     /// Remove only files explicitly recorded in Crest Player's library index.

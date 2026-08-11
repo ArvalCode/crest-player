@@ -84,22 +84,26 @@ fn fetch_embedded_lyrics(video_source: &str) -> Result<Lyrics, String> {
     {
         return Err("No embedded lyrics source.".to_string());
     }
-    let output = Command::new("ffmpeg")
-        .args([
-            "-loglevel",
-            "error",
-            "-i",
-            video_source,
-            "-map",
-            "0:s:0",
-            "-f",
-            "webvtt",
-            "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|error| format!("Could not read embedded lyrics: {error}"))?;
+    let (output, synced) = std::thread::scope(|scope| {
+        let synced = scope.spawn(|| embedded_lyrics_are_synced(video_source));
+        let output = Command::new("ffmpeg")
+            .args([
+                "-loglevel",
+                "error",
+                "-i",
+                video_source,
+                "-map",
+                "0:s:0",
+                "-f",
+                "webvtt",
+                "pipe:1",
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        (output, synced.join().unwrap_or(true))
+    });
+    let output = output.map_err(|error| format!("Could not read embedded lyrics: {error}"))?;
     if !output.status.success() {
         return Err("This cache has no embedded lyrics.".to_string());
     }
@@ -108,7 +112,6 @@ fn fetch_embedded_lyrics(video_source: &str) -> Result<Lyrics, String> {
     if lines.is_empty() {
         return Err("Embedded lyrics were empty.".to_string());
     }
-    let synced = embedded_lyrics_are_synced(video_source);
     if !synced {
         for line in &mut lines {
             line.timestamp = None;

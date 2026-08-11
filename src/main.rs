@@ -26,7 +26,7 @@ use crossterm::{
 use download_commands::DownloadCommand;
 use draw_startup_screen::{
     DELETE_MEDIA_SETTING, HOME_OPTION_COUNT, RESET_WALLPAPER_SETTING, SETTINGS_OPTION_COUNT,
-    draw_startup_screen,
+    StartupScreenState, draw_startup_screen,
 };
 use idle_mode::{IdleMode, IdleRenderState, draw_idle_mode};
 use lyrics::{Lyrics, fetch_lyrics_with_caption_fallback};
@@ -208,17 +208,16 @@ fn process_download_completions(
 ) -> bool {
     let mut changed = false;
     while let Ok(download) = receiver.try_recv() {
-        app.finish_download(
-            &download.queue_path,
-            download.title.clone(),
-            download.success,
-        );
+        let cancelled = app.finish_download(&download.queue_path);
         if let Some(index) = player
             .queue
             .iter()
             .position(|(_, path)| path == &download.queue_path)
         {
-            if download.success
+            if cancelled {
+                player.queue.remove(index);
+                player.download_failed(&download.queue_path);
+            } else if download.success
                 && (download.autoplay || player.status == "Downloading...")
                 && player.child.is_none()
             {
@@ -288,8 +287,13 @@ fn process_library_download_completions(
 ) -> bool {
     let mut changed = false;
     while let Ok(download) = receiver.try_recv() {
-        app.finish_download(&download.path, download.title.clone(), download.success);
-        if download.success {
+        let cancelled = app.finish_download(&download.path);
+        if cancelled {
+            let _ = std::fs::remove_file(&download.path);
+            let _ = std::fs::remove_file(
+                std::path::Path::new(&download.path).with_extension("crestvid"),
+            );
+        } else if download.success {
             if !app.is_library_path(&download.path) {
                 app.add_library_track(download.title, download.path);
                 save_library(&app.library);
@@ -350,30 +354,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             draw_synchronized(&mut terminal, |f| {
                 draw_startup_screen(
                     f,
-                    (
-                        settings_page,
-                        if settings_page {
-                            settings_selected
-                        } else {
-                            startup_selected
-                        },
-                    ),
-                    (
-                        app.lyrics_enabled,
-                        app.live_sync_enabled,
-                        app.pronunciations_enabled,
-                    ),
-                    (
-                        app.idle_video_enabled,
-                        app.idle_video_render_mode,
-                        app.color_precision,
-                        app.idle_video_fps,
-                        app.hardware_acceleration_enabled,
-                    ),
-                    app.autoplay_enabled,
-                    app.library.len(),
-                    app.home_wallpaper.as_ref(),
-                    (player.title.as_deref(), player.status.as_str()),
+                    StartupScreenState {
+                        page: (
+                            settings_page,
+                            if settings_page {
+                                settings_selected
+                            } else {
+                                startup_selected
+                            },
+                        ),
+                        lyric_settings: (
+                            app.lyrics_enabled,
+                            app.live_sync_enabled,
+                            app.pronunciations_enabled,
+                        ),
+                        video_settings: (
+                            app.idle_video_enabled,
+                            app.idle_video_render_mode,
+                            app.color_precision,
+                            app.idle_video_fps,
+                            app.hardware_acceleration_enabled,
+                        ),
+                        autoplay_enabled: app.autoplay_enabled,
+                        library_track_count: app.library.len(),
+                        home_wallpaper: app.home_wallpaper.as_ref(),
+                        playback: (player.title.as_deref(), player.status.as_str()),
+                    },
                 )
             })?;
             if event::poll(Duration::from_millis(50))?
@@ -452,6 +458,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     app.autoplay_enabled = !app.autoplay_enabled;
                                 }
                                 DELETE_MEDIA_SETTING => {
+                                    app.cancel_active_downloads();
                                     player.stop();
                                     player.cleanup_temp_media();
                                     player.queue.clear();
@@ -1059,6 +1066,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(title) = player.title.clone()
                     && autoplay_requested_for.as_ref() != Some(&title)
                     && player.queue.is_empty()
+                    && player.position() >= Duration::from_secs(30)
                 {
                     autoplay_requested_for = Some(title.clone());
                     let video_id = player.current_video_id();
@@ -1098,11 +1106,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.lyrics_scroll = 0;
                         let tx = lyrics_tx.clone();
                         let video_source = player.video_source().unwrap_or_else(|| {
-                            format!("ytsearch1:{clean_title} official music video")
+                            std::sync::Arc::from(format!(
+                                "ytsearch1:{clean_title} official music video"
+                            ))
                         });
                         std::thread::spawn(move || {
                             let result = std::panic::catch_unwind(|| {
-                                fetch_lyrics_with_caption_fallback(&clean_title, &video_source)
+                                fetch_lyrics_with_caption_fallback(
+                                    &clean_title,
+                                    video_source.as_ref(),
+                                )
                             })
                             .unwrap_or_else(|_| {
                                 Err("Lyrics processing failed unexpectedly.".to_string())

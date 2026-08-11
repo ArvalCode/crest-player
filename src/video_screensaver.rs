@@ -66,7 +66,7 @@ fn buffer_limit(width: u16, height: u16, fps: u16) -> usize {
 pub struct VideoScreensaver {
     receiver: Option<Receiver<VideoFrame>>,
     stop: Option<Arc<AtomicBool>>,
-    key: Option<(String, u16, u16, u16, bool)>,
+    key: Option<(Arc<str>, u16, u16, u16, bool)>,
     latest: Option<VideoFrame>,
     pending: Option<VideoFrame>,
     history: VecDeque<VideoFrame>,
@@ -98,7 +98,7 @@ impl VideoScreensaver {
     pub fn update(
         &mut self,
         visible: bool,
-        source: Option<String>,
+        source: Option<Arc<str>>,
         position: Duration,
         width: u16,
         cell_height: u16,
@@ -257,7 +257,7 @@ impl VideoScreensaver {
 
     fn start(
         &mut self,
-        source: String,
+        source: Arc<str>,
         position: Duration,
         width: u16,
         height: u16,
@@ -278,7 +278,7 @@ impl VideoScreensaver {
         let _ = thread::Builder::new()
             .name("crest-video-decode".to_string())
             .spawn(move || {
-            if let Ok(mut cache) = VideoCache::open(&worker_source) {
+            if let Ok(mut cache) = VideoCache::open(worker_source.as_ref()) {
                 let cache_fps = cache.fps.max(1);
                 let cache_width = cache.width;
                 let cache_height = cache.height;
@@ -304,7 +304,7 @@ impl VideoScreensaver {
                 return;
             }
             let resolution_started = Instant::now();
-            let direct_url = if std::path::Path::new(&worker_source).is_file() {
+            let direct_url = if std::path::Path::new(worker_source.as_ref()).is_file() {
                 worker_source.clone()
             } else {
                 let resolved = Command::new("yt-dlp")
@@ -313,7 +313,7 @@ impl VideoScreensaver {
                         "-g",
                         "-f",
                         "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
-                        &worker_source,
+                        worker_source.as_ref(),
                     ])
                     .stdin(Stdio::null())
                     .stderr(Stdio::null())
@@ -325,19 +325,19 @@ impl VideoScreensaver {
                 if !output.status.success() {
                     return;
                 }
-                String::from_utf8_lossy(&output.stdout)
+                Arc::from(String::from_utf8_lossy(&output.stdout)
                     .lines()
                     .next()
                     .unwrap_or_default()
                     .trim()
-                    .to_string()
+                    .to_string())
             };
             if direct_url.is_empty() {
                 return;
             }
 
             let filter = format!(
-                "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+                "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
             );
             // Account for URL resolution time so video starts at the audio clock's
             // current position rather than where it was when the worker spawned.
@@ -367,7 +367,7 @@ impl VideoScreensaver {
                     "-thread_queue_size",
                     "256",
                     "-sws_flags",
-                    "lanczos",
+                    "bicubic",
                     "-ss",
                     &seek,
                 ]);
@@ -376,7 +376,7 @@ impl VideoScreensaver {
                 }
                 command.args([
                     "-i",
-                    &direct_url,
+                    direct_url.as_ref(),
                     "-an",
                     "-sn",
                     "-dn",

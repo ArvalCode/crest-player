@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct Player {
@@ -12,7 +13,7 @@ pub struct Player {
     elapsed_before_start: Duration,
     current_path: Option<String>,
     last_finished_title: Option<String>,
-    video_sources: HashMap<String, String>,
+    video_sources: HashMap<String, Arc<str>>,
 }
 
 impl Player {
@@ -60,10 +61,10 @@ impl Player {
         }
         // If path is a local file and exists, play directly
         // If path is in the library, use the actual file path
-        let play_path = if path.starts_with("http://") || path.starts_with("https://") {
-            path.to_string()
-        } else if Path::new(path).exists()
-            && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false)
+        let play_path = if path.starts_with("http://")
+            || path.starts_with("https://")
+            || (Path::new(path).exists()
+                && fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false))
         {
             path.to_string()
         } else if path.contains("ytmusic_play_") && path.contains(".mp3") {
@@ -112,10 +113,10 @@ impl Player {
 
     pub fn register_video_source(&mut self, audio_path: &str, youtube_url: &str) {
         self.video_sources
-            .insert(audio_path.to_string(), youtube_url.to_string());
+            .insert(audio_path.to_string(), Arc::from(youtube_url));
     }
 
-    pub fn video_source(&self) -> Option<String> {
+    pub fn video_source(&self) -> Option<Arc<str>> {
         let title = self.title.as_ref()?;
         Some(
             self.current_path
@@ -124,7 +125,7 @@ impl Player {
                     let cache = std::path::Path::new(path).with_extension("crestvid");
                     cache
                         .is_file()
-                        .then(|| cache.to_string_lossy().into_owned())
+                        .then(|| Arc::from(cache.to_string_lossy().into_owned()))
                 })
                 .or_else(|| {
                     self.current_path
@@ -132,7 +133,7 @@ impl Player {
                         .and_then(|path| self.video_sources.get(path))
                         .cloned()
                 })
-                .unwrap_or_else(|| format!("ytsearch1:{title} official music video")),
+                .unwrap_or_else(|| Arc::from(format!("ytsearch1:{title} official music video"))),
         )
     }
 
@@ -142,9 +143,9 @@ impl Player {
             self.video_sources.remove(&audio_path);
         }
         for (_, path) in self.queue.clone() {
+            self.video_sources.remove(&path);
             if path.contains("ytmusic_play_") {
                 let _ = std::fs::remove_file(&path);
-                self.video_sources.remove(&path);
             }
         }
     }
@@ -237,7 +238,9 @@ impl Player {
                     self.child = None;
                     self.status = "Stopped".to_string();
                     self.last_finished_title = self.title.take();
-                    self.current_path = None;
+                    if let Some(path) = self.current_path.take() {
+                        self.video_sources.remove(&path);
+                    }
                     self.playback_started = None;
                     self.elapsed_before_start = Duration::default();
                     // After playback, delete temp streaming file if needed

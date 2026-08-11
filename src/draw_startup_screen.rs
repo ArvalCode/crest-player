@@ -11,16 +11,26 @@ pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
 pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
-pub fn draw_startup_screen(
-    f: &mut ratatui::Frame,
-    page: (bool, usize),
-    lyric_settings: (bool, bool, bool),
-    video_settings: (bool, VideoRenderMode, ColorPrecision, u16, bool),
-    autoplay_enabled: bool,
-    library_track_count: usize,
-    home_wallpaper: Option<&HomeWallpaper>,
-    playback: (Option<&str>, &str),
-) {
+pub struct StartupScreenState<'a> {
+    pub page: (bool, usize),
+    pub lyric_settings: (bool, bool, bool),
+    pub video_settings: (bool, VideoRenderMode, ColorPrecision, u16, bool),
+    pub autoplay_enabled: bool,
+    pub library_track_count: usize,
+    pub home_wallpaper: Option<&'a HomeWallpaper>,
+    pub playback: (Option<&'a str>, &'a str),
+}
+
+pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>) {
+    let StartupScreenState {
+        page,
+        lyric_settings,
+        video_settings,
+        autoplay_enabled,
+        library_track_count,
+        home_wallpaper,
+        playback,
+    } = state;
     let (settings_page, selected) = page;
     let (lyrics_enabled, live_sync_enabled, pronunciations_enabled) = lyric_settings;
     let (
