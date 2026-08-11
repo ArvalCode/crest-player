@@ -297,9 +297,38 @@ crest-player --help
 | `-h`, `--help` | Display command-line help and exit |
 | `--install-desktop` | Add or refresh the per-user Linux application launcher and icon |
 | `--remove` | Interactively remove Crest Player and its data |
-| `--storage` | Display application, downloaded-music, and video-cache storage usage |
+| `--storage` | Display executable, shared runtime dependencies, and downloaded-media storage usage |
 
 Run `crest-player` without an option to open the player normally.
+
+On Arch Linux, `--storage` reads the installed package database and includes the
+deduplicated recursive runtime package graph for FFmpeg, `ffplay`, `yt-dlp`, and
+Crest Player's native shared libraries. It reports the executable, shared
+runtime packages, downloaded media, and combined overall total separately.
+Shared runtime packages may already be used by the operating system or other
+applications, so this is a complete environment footprint rather than the disk
+space uniquely owned by Crest Player. Platforms without supported package
+metadata report the executable and media totals and mark shared runtime storage
+as unavailable.
+
+Example from the benchmark system:
+
+```text
+Crest Player storage
+
+Application executable: 24.03 MiB
+Shared runtime packages: 856.81 MiB across 207 package(s)
+Application + runtime:  880.84 MiB
+Downloaded music:      16.84 MiB across 6 file(s)
+Downloaded video:      81.33 MiB across 6 file(s)
+Music + video total:   98.17 MiB
+Overall total:         979.00 MiB
+```
+
+The executable is therefore about 24 MiB, but the complete runtime environment
+on that machine is about 881 MiB before downloaded media. These figures vary by
+operating system, package versions, enabled FFmpeg features, and dependencies
+already present on the client.
 
 ### Linux application launcher
 
