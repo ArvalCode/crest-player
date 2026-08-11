@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# Put Crest Player and all of its media helpers in one named cgroup when a
+# systemd user manager is available. System monitors can present that cgroup as
+# a single application while the UI continues to run in this terminal.
+if command -v systemd-run >/dev/null 2>&1 \
+    && systemctl --user show-environment >/dev/null 2>&1; then
+    exec systemd-run \
+        --user \
+        --scope \
+        --quiet \
+        --unit="crest-player-$$" \
+        --description="Crest Player" \
+        crest-player "$@"
+fi
+
+# Non-systemd distributions and minimal sessions still get a working launcher.
+exec crest-player "$@"

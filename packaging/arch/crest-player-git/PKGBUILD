@@ -45,6 +45,10 @@ check() {
 package() {
   cd "$srcdir/crest-player"
   install -Dm0755 target/release/crest-player "$pkgdir/usr/bin/crest-player"
+  install -Dm0755 packaging/linux/crest-player-launch \
+    "$pkgdir/usr/bin/crest-player-launch"
+  install -Dm0644 packaging/linux/io.github.ArvalCode.CrestPlayer.desktop \
+    "$pkgdir/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop"
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/crest-player/LICENSE"
   install -Dm0644 README.md "$pkgdir/usr/share/doc/crest-player/README.md"
 }

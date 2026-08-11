@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Crest Player
+GenericName=Terminal Music Player
+Comment=Play music and ASCII video in the terminal
+Exec=crest-player-launch
+TryExec=crest-player-launch
+Icon=multimedia-player
+Terminal=true
+Categories=AudioVideo;Audio;Player;
+Keywords=music;audio;youtube;terminal;
+StartupNotify=false

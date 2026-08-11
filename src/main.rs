@@ -21,7 +21,7 @@ use crossterm::{
     execute,
     terminal::{
         BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
-        disable_raw_mode, enable_raw_mode,
+        SetTitle, disable_raw_mode, enable_raw_mode,
     },
 };
 use download_commands::DownloadCommand;
@@ -330,7 +330,12 @@ fn process_library_download_completions(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        SetTitle("Crest Player"),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
     let backend = CrosstermBackend::new(BufWriter::with_capacity(1024 * 1024, stdout));
     let mut terminal = Terminal::new(backend)?;
     let mut app = App::new();
