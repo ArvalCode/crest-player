@@ -49,6 +49,8 @@ package() {
     "$pkgdir/usr/bin/crest-player-launch"
   install -Dm0644 packaging/linux/io.github.ArvalCode.CrestPlayer.desktop \
     "$pkgdir/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop"
+  install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg"
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/crest-player/LICENSE"
   install -Dm0644 README.md "$pkgdir/usr/share/doc/crest-player/README.md"
 }

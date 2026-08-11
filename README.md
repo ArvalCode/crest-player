@@ -197,6 +197,8 @@ For a manual, system-wide installation, copy the launcher and desktop entry too:
 ```sh
 sudo cp packaging/linux/crest-player-launch /usr/local/bin/
 sudo cp packaging/linux/io.github.ArvalCode.CrestPlayer.desktop /usr/share/applications/
+sudo install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer.svg \
+  /usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg
 ```
 
 ## Windows (PowerShell)
@@ -272,17 +274,18 @@ without deleting those media files.
 
 ### Manual Linux installation
 
-If you followed the manual commands in this README, remove all three installed
-launcher files:
+If you followed the manual commands in this README, remove the installed player,
+launcher, desktop entry, and icon:
 
 ```sh
 sudo rm /usr/local/bin/crest-player
 sudo rm /usr/local/bin/crest-player-launch
 sudo rm /usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop
+sudo rm /usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg
 ```
 
 Older installations may have only `/usr/local/bin/crest-player`; a "No such
-file" message for either newer launcher file is harmless. Remove settings,
+file" message for any newer launcher or icon file is harmless. Remove settings,
 wallpaper, and the Music-library index as described in the Arch section above.
 You may then delete the cloned `crest-player` repository from wherever you
 cloned it. Rust build output under `target/` is contained in that repository.
