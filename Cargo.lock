@@ -183,6 +183,7 @@ dependencies = [
  "dirs",
  "fastrand",
  "ib-romaji",
+ "libc",
  "ratatui",
  "reqwest",
  "serde",

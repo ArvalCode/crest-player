@@ -183,6 +183,21 @@ Optional system-wide install:
 sudo cp target/release/crest-player /usr/local/bin/crest-player
 ```
 
+### Command-line options
+
+Display the available commands without opening the interface:
+
+```sh
+crest-player --help
+```
+
+| Option | Action |
+| --- | --- |
+| `-h`, `--help` | Display command-line help and exit |
+| `--remove` | Interactively remove Crest Player and its data |
+
+Run `crest-player` without an option to open the player normally.
+
 ### Linux application launcher
 
 The Arch package installs a **Crest Player** desktop entry that opens the app in
@@ -238,39 +253,78 @@ Native Windows supports playback, search, downloads, video, seeking, and skippin
 
 ## Uninstalling
 
-Uninstalling the executable does **not** delete downloaded music automatically.
-If you want to remove the downloaded library too, do that first while Crest
-Player is still installed: open **Settings**, choose **Delete All Downloaded
-Media**, and confirm. This removes only the MP3 and `.crestvid` files recorded in
-Crest Player's library index. Then quit the player.
+For a complete interactive uninstall, run:
+
+```sh
+crest-player --remove
+```
+
+The command explains what will be deleted and requires typing `REMOVE` before
+changing anything. It removes indexed downloads and interrupted-download
+sidecars, settings, the captured wallpaper, the library index, and the installed
+program/launcher/icon. Package installations are removed through `pacman`;
+on Linux, removing the application files requires `sudo`, while personal media
+and configuration cleanup runs as the current user before elevation.
+The command refuses to uninstall when run from a development checkout or an
+unrecognized location, preventing accidental source-tree deletion.
+
+The platform-specific manual steps below are provided for auditing or recovery
+if the executable no longer runs.
+
+The following steps remove the program and every file owned by Crest Player.
+Uninstalling only the executable intentionally leaves settings and downloaded
+music behind.
+
+Before uninstalling, quit Crest Player. Its systemd scope is transient and
+disappears when the player and its media helpers exit; Crest Player does not
+install a system service or background daemon.
+
+If the program still runs, remove downloaded media safely from inside it first:
+open **Settings**, choose **Delete All Known Songs/Videos**, and confirm. This
+uses the library index to delete only MP3 and `.crestvid` files known to Crest
+Player. Quit the player afterward. If you want to keep downloaded music, skip
+this step.
 
 ### Arch Linux package
 
-Remove the AUR package and dependencies that are no longer required by another
-installed package:
+Remove the AUR package. The `-s` option also removes its dependencies only when
+no other installed package needs them, while `-n` removes package backup files:
 
 ```sh
 sudo pacman -Rns crest-player-git
 ```
 
-This removes the packaged executable, launcher, and desktop entry. Remove the
-per-user settings and captured wallpaper with:
+This removes `/usr/bin/crest-player`, `/usr/bin/crest-player-launch`, the desktop
+entry, icon, license, and packaged documentation. Remove per-user settings and
+the captured Home wallpaper with:
 
 ```sh
-rm -r ~/.config/crest-player
+rm -rf ~/.config/crest-player
 ```
 
-If `XDG_CONFIG_HOME` is set to a custom location, remove its `crest-player`
-directory instead. Finally, remove `ytmusic_library.csv` from your configured
-Music directory. The usual Linux location is:
+If `XDG_CONFIG_HOME` points somewhere other than `~/.config`, remove the
+`crest-player` directory there instead. Remove the library index from the Music
+directory selected by your desktop environment (normally `~/Music`):
 
 ```sh
-rm ~/Music/ytmusic_library.csv
+rm -f ~/Music/ytmusic_library.csv
 ```
 
-If you chose to keep your downloaded library, leave its `*_ytmusic.mp3` and
-matching `.crestvid` files in the Music directory. The index can be removed
-without deleting those media files.
+If in-app deletion was skipped but you want complete data removal, inspect that
+Music directory and delete Crest Player's `*_ytmusic.mp3` files and their
+matching `*_ytmusic.crestvid` files. An interrupted download may also leave a
+matching `.part` or `*_ytmusic.video.cache` file. Check filenames before removal
+instead of applying a broad wildcard to a Music directory containing unrelated
+files.
+
+An AUR helper may retain a build checkout after the package is removed. These
+common cache directories are not installed program files, but can be deleted if
+present:
+
+```sh
+rm -rf ~/.cache/yay/crest-player-git
+rm -rf ~/.cache/paru/clone/crest-player-git
+```
 
 ### Manual Linux installation
 
@@ -285,30 +339,62 @@ sudo rm /usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.s
 ```
 
 Older installations may have only `/usr/local/bin/crest-player`; a "No such
-file" message for any newer launcher or icon file is harmless. Remove settings,
-wallpaper, and the Music-library index as described in the Arch section above.
-You may then delete the cloned `crest-player` repository from wherever you
-cloned it. Rust build output under `target/` is contained in that repository.
+file" message for a newer launcher or icon is harmless. Remove the configuration
+directory, library index, optional media, and any interrupted-download remnants
+as described in the Arch section above. Delete the cloned `crest-player`
+repository from the exact location where you cloned it; its `target/` directory
+contains all project-local Rust build output.
+
+Desktop environments normally notice removed launchers automatically. If a
+stale Crest Player entry or icon remains after logging out and back in, refresh
+the standard caches when those utilities are installed:
+
+```sh
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+gtk-update-icon-cache ~/.local/share/icons/hicolor 2>/dev/null || true
+```
+
+The package does not install either file under `~/.local`; these commands only
+refresh the user's cached application menu and icons.
+
+### Optional dependency removal on Linux
+
+The Arch `pacman -Rns` command above already removes dependencies that became
+unused. For a manual installation, FFmpeg and `yt-dlp` are runtime dependencies;
+Rust and Git are build tools. Remove them through the same package manager used
+to install them only if no other application or project needs them. System
+libraries such as glibc, OpenSSL, zlib, zstd, and Brotli are shared components
+and should not be removed manually.
 
 Do not remove shared tools such as FFmpeg, `yt-dlp`, Rust, or Git unless you know
 that no other program or project uses them.
 
 ### Windows
 
-First use **Settings > Delete All Downloaded Media** if you do not want to keep
-downloaded songs. Delete the cloned `crest-player` folder, including its
-`target` build directory, and delete any copy of `crest-player.exe` that you
-manually placed elsewhere. Remove settings and the captured wallpaper in
-PowerShell with:
+First use **Settings > Delete All Known Songs/Videos** if you do not want to keep
+downloaded songs, then quit the player. Delete the cloned `crest-player` folder,
+including its `target` build directory, and delete any copy of
+`crest-player.exe` that you manually placed elsewhere. Remove settings and the
+captured Home wallpaper in PowerShell with:
 
 ```powershell
-Remove-Item -Recurse -Force "$env:APPDATA\crest-player"
+Remove-Item -Recurse -Force "$env:APPDATA\crest-player" -ErrorAction SilentlyContinue
 ```
 
-Lastly, delete `ytmusic_library.csv` from the current user's Music folder. Keep
-the `*_ytmusic.mp3` and matching `.crestvid` files there if you chose to retain
-the downloaded library. Crest Player does not create registry entries or a
-Windows service.
+Lastly, remove `ytmusic_library.csv` from the current user's actual Music folder.
+If in-app deletion was skipped, remove Crest Player's `*_ytmusic.mp3` and
+matching `*_ytmusic.crestvid` files there, plus any matching `.part` or
+`*_ytmusic.video.cache` remnants from interrupted work. Keep those media files
+if you want to retain the downloaded library. Crest Player does not create
+registry entries, scheduled tasks, Start Menu shortcuts, or a Windows service.
+
+FFmpeg, `yt-dlp`, Rust, Git, and Microsoft C++ Build Tools are separate shared
+installations. They are not part of Crest Player and should be uninstalled only
+if you installed them solely for this project and no longer need them.
+
+After completing the applicable steps, no Crest Player executable, launcher,
+icon, service, settings, wallpaper, library index, downloaded media, source
+checkout, or project-local build output remains on the computer.
 
 ## License
 MIT

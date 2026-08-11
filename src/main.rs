@@ -10,6 +10,7 @@ mod search;
 mod security;
 mod ui_downloaded_only;
 mod ui_with_player;
+mod uninstall;
 mod video_cache;
 mod video_screensaver;
 mod wallpaper;
@@ -327,7 +328,46 @@ fn process_library_download_completions(
     changed
 }
 
+fn handle_command_line() -> Result<bool, String> {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    match arguments.as_slice() {
+        [] => Ok(false),
+        [argument] if argument == "--help" || argument == "-h" => {
+            println!("Crest Player {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "Terminal music player with YouTube streaming, synchronized lyrics, and ASCII video"
+            );
+            println!();
+            println!("Usage:");
+            println!("  crest-player [OPTION]");
+            println!();
+            println!("Options:");
+            println!("  -h, --help    Show this help message and exit");
+            println!("      --remove  Interactively remove Crest Player and its data");
+            println!();
+            println!("Run without an option to start Crest Player.");
+            Ok(true)
+        }
+        [argument] if argument == "--remove" => uninstall::remove_crest_player().map(|_| true),
+        _ => Err(format!(
+            "unknown option or argument: {}\nRun 'crest-player --help' for usage.",
+            arguments
+                .first()
+                .map(|argument| argument.to_string_lossy())
+                .unwrap_or_default()
+        )),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    match handle_command_line() {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("crest-player: {error}");
+            std::process::exit(2);
+        }
+    }
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
