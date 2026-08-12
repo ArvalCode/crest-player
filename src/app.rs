@@ -133,7 +133,15 @@ impl App {
         let path = normalize_existing_path(path);
         self.library_paths.insert(path.clone());
         self.available_library_paths.insert(path.clone());
-        self.library.push((title, path));
+        if let Some(track) = self
+            .library
+            .iter_mut()
+            .find(|(_, library_path)| library_path == &path)
+        {
+            *track = (title, path);
+        } else {
+            self.library.push((title, path));
+        }
     }
 
     pub fn remove_library_track(&mut self, path: &str) -> std::io::Result<()> {
@@ -169,6 +177,10 @@ impl App {
 
     pub fn has_active_downloads(&self) -> bool {
         !self.downloads.is_empty()
+    }
+
+    pub fn is_downloading(&self, path: &str) -> bool {
+        self.downloads.iter().any(|job| job.path == path)
     }
 
     pub fn cancel_active_downloads(&mut self) {

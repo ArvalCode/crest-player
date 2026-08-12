@@ -292,6 +292,14 @@ fn queue_library_download(
         return;
     };
     let path_string = path.to_string_lossy().into_owned();
+    if app.is_library_file_available(&path_string) {
+        app.error = Some(format!("{title} is already downloaded."));
+        return;
+    }
+    if app.is_downloading(&path_string) {
+        app.error = Some(format!("{title} is already downloading."));
+        return;
+    }
     app.start_download(path_string.clone(), title.clone());
     let sender = sender.clone();
     std::thread::spawn(move || {
@@ -336,10 +344,10 @@ fn process_library_download_completions(
                 std::path::Path::new(&download.path).with_extension("crestvid"),
             );
         } else if download.success {
-            if !app.is_library_path(&download.path) {
-                app.add_library_track(download.title, download.path);
-                save_library(&app.library);
-            }
+            // This also refreshes availability when an indexed file was missing
+            // and the user downloaded it again.
+            app.add_library_track(download.title, download.path);
+            save_library(&app.library);
         } else {
             app.error = Some(format!("Failed to download {}", download.title));
         }
@@ -1059,11 +1067,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         (KeyCode::Char('l'), m)
-                            if m.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                            if m.contains(crossterm::event::KeyModifiers::CONTROL)
+                                && !app.show_library =>
                         {
                             // Ctrl+l: Like/download selected
-                            if !app.results.is_empty() {
-                                let (title, id) = app.results[app.selected].clone();
+                            if let Some((title, id)) = app.results.get(app.selected).cloned() {
                                 let url = format!("https://www.youtube.com/watch?v={}", id);
                                 let video_cache_plan =
                                     video_cache_plan(&app, screen.width, screen.height);
