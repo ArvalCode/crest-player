@@ -25,19 +25,13 @@ ASCII music-video display when left idle.
 
 ### Non-blocking downloads and progressive streams
 
-Search, stream resolution, permanent downloads, lyrics, and video-cache builds
-run outside the input loop. Active jobs appear in a temporary **Download Queue**
-panel, which closes when the final job finishes. Streamed tracks resolve
-YouTube's best audio URL and play progressively through `ffplay`; they are not
-downloaded as complete temporary MP3s. Permanent `Ctrl+L` downloads still save
-an MP3 and build its reusable video cache.
-
-Crest Player records the duration reported by YouTube when it resolves a stream.
-If `ffplay` exits before that duration because of a temporary network or media
-server interruption, the player displays **Reconnecting audio...** and resumes
-the same track from its last known position. It advances the queue only after
-the track reaches its expected end. A connection interruption can therefore
-produce a short pause, but should not skip the unfinished song.
+Search, temporary playback downloads, permanent downloads, lyrics, and
+video-cache builds run outside the input loop. Active jobs appear in a temporary
+**Download Queue** panel, which closes when the final job finishes. Selected
+tracks finish downloading as temporary MP3s before `ffplay` starts, preventing
+live network stalls from interrupting a song. The temporary file is deleted
+after playback. Permanent `Ctrl+L` downloads save an MP3 in the music library
+and build its reusable video cache.
 
 ### Compact `.crestvid` caches
 

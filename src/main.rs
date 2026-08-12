@@ -39,9 +39,7 @@ use ratatui::Terminal;
 use ratatui::prelude::CrosstermBackend;
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use search::{download_audio, search_youtube};
-use security::{
-    bounded_output, contained_media_path, external_command, valid_media_url, valid_youtube_id,
-};
+use security::{bounded_output, contained_media_path, external_command, valid_youtube_id};
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 use ui_with_player::ui_with_player;
@@ -166,6 +164,7 @@ fn queue_youtube_download(
         .unwrap_or_default()
         .as_millis();
     let queue_path = format!("crest-stream-pending:{unique}");
+    let temporary_audio_path = std::env::temp_dir().join(format!("ytmusic_play_{unique}.mp3"));
     let autoplay = player.child.is_none()
         && !player
             .queue
@@ -189,10 +188,14 @@ fn queue_youtube_download(
             "2",
             "--no-playlist",
             "-f",
-            "bestaudio/best",
+            "bestaudio",
+            "-x",
+            "--audio-format",
+            "mp3",
+            "-o",
+            temporary_audio_path.to_str().unwrap_or_default(),
             "--print",
             "%(duration)s",
-            "-g",
             &url,
         ]);
         let output = bounded_output(command, 64 * 1024);
@@ -210,13 +213,15 @@ fn queue_youtube_download(
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite() && *value > 0.0)
             .map(Duration::from_secs_f64);
-        let playback_path = output_lines
-            .iter()
-            .find(|path| valid_media_url(path.trim()))
-            .cloned()
-            .unwrap_or_default();
+        let playback_path = temporary_audio_path.to_string_lossy().into_owned();
         let success = output.as_ref().is_ok_and(|output| output.status.success())
-            && !playback_path.is_empty();
+            && temporary_audio_path
+                .metadata()
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+
+        if !success {
+            let _ = std::fs::remove_file(&temporary_audio_path);
+        }
 
         let _ = sender.send(DownloadFinished {
             title,
@@ -246,6 +251,9 @@ fn process_download_completions(
         {
             if cancelled {
                 player.queue.remove(index);
+                if download.playback_path.contains("ytmusic_play_") {
+                    let _ = std::fs::remove_file(&download.playback_path);
+                }
                 player.download_failed(&download.queue_path);
             } else if download.success
                 && (download.autoplay || player.status == "Downloading...")
