@@ -339,8 +339,12 @@ For a per-user launcher that does not require `sudo`, run:
 
 This installs the executable at `~/.local/bin/crest-player` along with the
 launcher, desktop entry, and icon under `~/.local`, without `sudo` or writes to
-`/usr/local`. Re-running the command updates the installed executable. If Crest
-Player does not appear in the application menu immediately, log out and back in.
+`/usr/local`. The installer adds a marked, removable `~/.local/bin` PATH block
+to the current user's standard shell startup files, so `crest-player` is
+available in every newly opened terminal. Re-running the command updates the
+installed executable without duplicating that configuration. The desktop entry
+requests a dedicated terminal window for the player. If Crest Player does not
+appear in the application menu immediately, log out and back in.
 
 The Arch package installs a **Crest Player** desktop entry that opens the app in
 a terminal. When a systemd user session is available, the launcher places Crest

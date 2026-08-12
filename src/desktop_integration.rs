@@ -4,6 +4,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
+const PATH_BLOCK_START: &str = "# >>> crest-player command >>>";
+#[cfg(unix)]
+const PATH_BLOCK_END: &str = "# <<< crest-player command <<<";
+
+#[cfg(unix)]
 const ICON: &str = include_str!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer.svg");
 
 #[cfg(unix)]
@@ -20,6 +25,7 @@ pub fn install() -> Result<(), String> {
     create_parent(&desktop)?;
     create_parent(&icon)?;
     install_executable(&executable, &installed_executable)?;
+    ensure_command_on_path(&home)?;
 
     let quoted_executable = shell_single_quote(&installed_executable.to_string_lossy());
     let launcher_contents = format!(
@@ -48,6 +54,7 @@ pub fn install() -> Result<(), String> {
     println!("Executable:    {}", installed_executable.display());
     println!("Desktop entry: {}", desktop.display());
     println!("Icon:          {}", icon.display());
+    println!("The crest-player command is available in newly opened terminals.");
     println!("If it does not appear immediately, log out and back in once.");
     Ok(())
 }
@@ -62,6 +69,7 @@ pub fn remove() -> Result<(), String> {
             Err(error) => return Err(format!("could not remove {}: {error}", path.display())),
         }
     }
+    remove_command_path_settings(&home)?;
     Ok(())
 }
 
@@ -157,6 +165,81 @@ fn create_parent(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+fn ensure_command_on_path(home: &Path) -> Result<(), String> {
+    let shell_block = format!(
+        "{PATH_BLOCK_START}\ncase \":$PATH:\" in\n  *:\"$HOME/.local/bin\":*) ;;\n  *) export PATH=\"$HOME/.local/bin:$PATH\" ;;\nesac\n{PATH_BLOCK_END}\n"
+    );
+    let fish_block =
+        format!("{PATH_BLOCK_START}\nfish_add_path --path $HOME/.local/bin\n{PATH_BLOCK_END}\n");
+
+    // .profile covers POSIX login shells. Existing interactive-shell files are
+    // also updated because many terminal emulators start non-login shells.
+    append_managed_block(&home.join(".profile"), &shell_block)?;
+    for relative in [".bash_profile", ".bashrc", ".zshrc"] {
+        let path = home.join(relative);
+        if path.is_file() {
+            append_managed_block(&path, &shell_block)?;
+        }
+    }
+    let fish_config = home.join(".config/fish/config.fish");
+    if fish_config.is_file() {
+        append_managed_block(&fish_config, &fish_block)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn append_managed_block(path: &Path, block: &str) -> Result<(), String> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    if existing.contains(PATH_BLOCK_START) {
+        return Ok(());
+    }
+    let separator = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("could not update {}: {error}", path.display()))?;
+    write!(file, "{separator}{block}")
+        .map_err(|error| format!("could not update {}: {error}", path.display()))
+}
+
+#[cfg(unix)]
+fn remove_command_path_settings(home: &Path) -> Result<(), String> {
+    for path in [
+        home.join(".profile"),
+        home.join(".bash_profile"),
+        home.join(".bashrc"),
+        home.join(".zshrc"),
+        home.join(".config/fish/config.fish"),
+    ] {
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(start) = contents.find(PATH_BLOCK_START) else {
+            continue;
+        };
+        let Some(relative_end) = contents[start..].find(PATH_BLOCK_END) else {
+            continue;
+        };
+        let mut end = start + relative_end + PATH_BLOCK_END.len();
+        if contents.as_bytes().get(end) == Some(&b'\n') {
+            end += 1;
+        }
+        let mut updated = contents;
+        updated.replace_range(start..end, "");
+        std::fs::write(&path, updated)
+            .map_err(|error| format!("could not update {}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -175,11 +258,34 @@ fn desktop_exec_path(value: &str) -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{desktop_exec_path, shell_single_quote};
+    use super::{
+        PATH_BLOCK_START, desktop_exec_path, ensure_command_on_path, remove_command_path_settings,
+        shell_single_quote,
+    };
 
     #[test]
     fn safely_quotes_launcher_paths() {
         assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
         assert_eq!(desktop_exec_path("a b"), "\"a b\"");
+    }
+
+    #[test]
+    fn command_path_setup_is_idempotent_and_removable() {
+        let home =
+            std::env::temp_dir().join(format!("crest-player-path-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".bashrc"), "# existing settings\n").unwrap();
+
+        ensure_command_on_path(&home).unwrap();
+        ensure_command_on_path(&home).unwrap();
+        let bashrc = std::fs::read_to_string(home.join(".bashrc")).unwrap();
+        assert_eq!(bashrc.matches(PATH_BLOCK_START).count(), 1);
+        assert!(bashrc.contains("$HOME/.local/bin"));
+
+        remove_command_path_settings(&home).unwrap();
+        let bashrc = std::fs::read_to_string(home.join(".bashrc")).unwrap();
+        assert_eq!(bashrc, "# existing settings\n");
+        std::fs::remove_dir_all(home).unwrap();
     }
 }
