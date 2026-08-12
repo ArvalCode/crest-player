@@ -10,6 +10,17 @@ pub fn remove_crest_player() -> Result<(), String> {
         return Err("usage: crest-player --remove".to_string());
     }
 
+    remove_crest_player_interactively()
+}
+
+/// Runs the same complete removal flow from the in-application Settings page.
+/// The caller must restore the terminal before invoking this so stdin, sudo,
+/// and the confirmation prompts are visible to the user.
+pub fn remove_crest_player_from_settings() -> Result<(), String> {
+    remove_crest_player_interactively()
+}
+
+fn remove_crest_player_interactively() -> Result<(), String> {
     println!("Crest Player removal");
     println!();
     println!("Choose what to remove:");

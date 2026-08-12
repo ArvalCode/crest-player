@@ -6,9 +6,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub const HOME_OPTION_COUNT: usize = 3;
-pub const SETTINGS_OPTION_COUNT: usize = 11;
-pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
-pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
+pub const SETTINGS_OPTION_COUNT: usize = 12;
+pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 3;
+pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
+pub const REMOVE_APPLICATION_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
 
 // Draws the startup screen with flamingo C ASCII art and mode selection
 pub struct StartupScreenState<'a> {
@@ -170,6 +171,10 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
                 } else {
                     "Press ` while viewing a music video to capture a Home wallpaper."
                 },
+            ),
+            (
+                "Remove Crest Player...",
+                "Choose application only, downloaded media only, or everything, then confirm removal.",
             ),
         ]
     } else {

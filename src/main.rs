@@ -29,8 +29,8 @@ use crossterm::{
 };
 use download_commands::DownloadCommand;
 use draw_startup_screen::{
-    DELETE_MEDIA_SETTING, HOME_OPTION_COUNT, RESET_WALLPAPER_SETTING, SETTINGS_OPTION_COUNT,
-    StartupScreenState, draw_startup_screen,
+    DELETE_MEDIA_SETTING, HOME_OPTION_COUNT, REMOVE_APPLICATION_SETTING, RESET_WALLPAPER_SETTING,
+    SETTINGS_OPTION_COUNT, StartupScreenState, draw_startup_screen,
 };
 use idle_mode::{IdleMode, IdleRenderState, draw_idle_mode};
 use lyrics::{Lyrics, fetch_lyrics_with_caption_fallback};
@@ -428,6 +428,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut startup_selected = 0; // 0 = stream+downloaded, 1 = downloaded only
     let mut settings_selected = 0;
+    let mut removal_requested = false;
 
     'home: loop {
         // --- Startup screen state ---
@@ -576,6 +577,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         app.home_wallpaper = None;
                                     }
+                                }
+                                REMOVE_APPLICATION_SETTING => {
+                                    removal_requested = true;
+                                    break 'home;
                                 }
                                 _ => {}
                             }
@@ -1313,6 +1318,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     player.queue.clear();
     disable_raw_mode()?;
     execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
+
+    if removal_requested {
+        uninstall::remove_crest_player_from_settings().map_err(io::Error::other)?;
+    }
 
     // (Performance summary output removed)
     Ok(())
