@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 const ICON: &str = include_str!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer.svg");
@@ -13,13 +13,15 @@ pub fn install() -> Result<(), String> {
         .and_then(|path| path.canonicalize())
         .map_err(|error| format!("could not locate the Crest Player executable: {error}"))?;
 
-    let [launcher, desktop, icon] = user_integration_paths(&home);
+    let [installed_executable, launcher, desktop, icon] = user_integration_paths(&home);
 
+    create_parent(&installed_executable)?;
     create_parent(&launcher)?;
     create_parent(&desktop)?;
     create_parent(&icon)?;
+    install_executable(&executable, &installed_executable)?;
 
-    let quoted_executable = shell_single_quote(&executable.to_string_lossy());
+    let quoted_executable = shell_single_quote(&installed_executable.to_string_lossy());
     let launcher_contents = format!(
         "#!/bin/sh\n\napplication={quoted_executable}\nif command -v systemd-run >/dev/null 2>&1 \\\n+    && systemctl --user show-environment >/dev/null 2>&1; then\n    exec systemd-run --user --scope --quiet --unit=\"crest-player-$$\" \\\n+        --description=\"Crest Player\" \"$application\" \"$@\"\nfi\nexec \"$application\" \"$@\"\n"
     )
@@ -43,6 +45,7 @@ pub fn install() -> Result<(), String> {
         .map_err(|error| format!("could not write {}: {error}", icon.display()))?;
 
     println!("Crest Player desktop integration installed.");
+    println!("Executable:    {}", installed_executable.display());
     println!("Desktop entry: {}", desktop.display());
     println!("Icon:          {}", icon.display());
     println!("If it does not appear immediately, log out and back in once.");
@@ -85,12 +88,63 @@ pub fn paths() -> Vec<std::path::PathBuf> {
 }
 
 #[cfg(unix)]
-fn user_integration_paths(home: &Path) -> [std::path::PathBuf; 3] {
+fn user_integration_paths(home: &Path) -> [std::path::PathBuf; 4] {
     [
+        home.join(".local/bin/crest-player"),
         home.join(".local/bin/crest-player-launch"),
         home.join(".local/share/applications/io.github.ArvalCode.CrestPlayer.desktop"),
         home.join(".local/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg"),
     ]
+}
+
+#[cfg(unix)]
+fn install_executable(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination
+        .canonicalize()
+        .ok()
+        .as_deref()
+        .is_some_and(|installed| installed == source)
+    {
+        return Ok(());
+    }
+
+    let temporary = temporary_install_path(destination)?;
+    let result = (|| {
+        let mut input = std::fs::File::open(source)
+            .map_err(|error| format!("could not read {}: {error}", source.display()))?;
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
+        std::io::copy(&mut input, &mut output)
+            .map_err(|error| format!("could not copy Crest Player: {error}"))?;
+        output.sync_all().map_err(|error| {
+            format!("could not finish writing {}: {error}", temporary.display())
+        })?;
+        let mut permissions = output
+            .metadata()
+            .map_err(|error| format!("could not inspect {}: {error}", temporary.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&temporary, permissions).map_err(|error| {
+            format!("could not make {} executable: {error}", temporary.display())
+        })?;
+        std::fs::rename(&temporary, destination)
+            .map_err(|error| format!("could not install {}: {error}", destination.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(unix)]
+fn temporary_install_path(destination: &Path) -> Result<PathBuf, String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", destination.display()))?;
+    Ok(parent.join(format!(".crest-player.install-{}.tmp", std::process::id())))
 }
 
 #[cfg(unix)]

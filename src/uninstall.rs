@@ -41,7 +41,10 @@ pub fn remove_crest_player() -> Result<(), String> {
     println!("Selected: {}", choice.label());
     println!("Music files not recorded in Crest Player's index will not be touched.");
     #[cfg(unix)]
-    if choice.removes_application() {
+    if installation
+        .as_ref()
+        .is_some_and(Installation::requires_privilege)
+    {
         println!("Removing the installed application files will require sudo.");
     }
     print!("Type REMOVE to continue: ");
@@ -132,6 +135,8 @@ fn installation_size(installation: &Installation) -> u64 {
     let mut paths = installation.installed_paths();
     paths.extend(crate::desktop_integration::paths());
     paths
+        .into_iter()
+        .collect::<HashSet<_>>()
         .iter()
         .filter_map(|path| std::fs::metadata(path).ok())
         .filter(|metadata| metadata.is_file())
@@ -253,6 +258,11 @@ enum Installation {
 }
 
 impl Installation {
+    #[cfg(unix)]
+    fn requires_privilege(&self) -> bool {
+        matches!(self, Self::SystemPackage(_) | Self::ManualSystem)
+    }
+
     fn detect(executable: &Path) -> Result<Self, String> {
         #[cfg(unix)]
         {
@@ -316,9 +326,10 @@ impl Installation {
                             ".local/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg",
                         ),
                     ];
-                    let mut arguments: Vec<&OsStr> = vec![OsStr::new("rm"), OsStr::new("-f")];
-                    arguments.extend(paths.iter().map(|path| path.as_os_str()));
-                    run_privileged(&arguments)
+                    for path in paths {
+                        remove_file_if_present(&path)?;
+                    }
+                    Ok(())
                 }
             }
         }

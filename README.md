@@ -273,10 +273,9 @@ cargo build --release
 ./target/release/crest-player
 ```
 
-Run the executable from this exact location or copy it to a permanent location
-before installing desktop integration. The per-user launcher records the
-executable's absolute path, so moving or deleting it afterward breaks that
-launcher until `--install-desktop` is run again from the new location.
+Running `--install-desktop` copies the executable to
+`~/.local/bin/crest-player`, so the source checkout can be moved or deleted
+afterward without breaking the installed command or application launcher.
 
 Optional system-wide install:
 
@@ -295,7 +294,7 @@ crest-player --help
 | Option | Action |
 | --- | --- |
 | `-h`, `--help` | Display command-line help and exit |
-| `--install-desktop` | Add or refresh the per-user Linux application launcher and icon |
+| `--install-desktop` | Install or refresh the per-user executable, application launcher, and icon |
 | `--remove` | Interactively remove Crest Player and its data |
 | `--storage` | Display executable, shared runtime dependencies, and downloaded-media storage usage |
 
@@ -338,7 +337,9 @@ For a per-user launcher that does not require `sudo`, run:
 ./target/release/crest-player --install-desktop
 ```
 
-This installs the launcher, desktop entry, and icon under `~/.local`. If Crest
+This installs the executable at `~/.local/bin/crest-player` along with the
+launcher, desktop entry, and icon under `~/.local`, without `sudo` or writes to
+`/usr/local`. Re-running the command updates the installed executable. If Crest
 Player does not appear in the application menu immediately, log out and back in.
 
 The Arch package installs a **Crest Player** desktop entry that opens the app in
@@ -419,8 +420,9 @@ The command offers three choices: remove only the application while keeping
 music and settings, remove only indexed music/video while keeping the application
 and settings, or remove everything. It explains the selected scope and requires
 typing `REMOVE` before changing anything. Package installations are removed
-through `pacman`; on Linux, choices that remove application files require
-`sudo`, while personal media and configuration cleanup runs as the current user.
+through `pacman`; on Linux, system package and `/usr/local` removals require
+`sudo`, while a per-user installation and personal data are removed as the
+current user.
 Application removal also deletes the per-user launcher, desktop entry, and icon
 created by `--install-desktop`.
 After successful removal, it reports the total amount of Crest Player storage
