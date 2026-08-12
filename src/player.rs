@@ -4,6 +4,9 @@ use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+const RECONNECT_OVERLAP: Duration = Duration::from_secs(5);
+const STREAM_READ_TIMEOUT_MICROS: &str = "5000000";
+
 pub struct Player {
     pub child: Option<Child>,
     pub title: Option<String>,
@@ -99,7 +102,11 @@ impl Player {
             self.last_temp_file = None;
         }
 
-        let child = external_command("ffplay")
+        let mut command = external_command("ffplay");
+        if valid_media_url(&play_path) {
+            command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
+        }
+        let child = command
             .args(["-nodisp", "-autoexit", &play_path])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -275,6 +282,12 @@ impl Player {
                     if let Some(started) = self.playback_started.take() {
                         self.elapsed_before_start += started.elapsed();
                     }
+                    // ffplay's lifetime is only an approximation of audible
+                    // progress. A network stall can keep the process alive while
+                    // no audio advances, so retry slightly behind that estimate
+                    // instead of jumping over content the listener never heard.
+                    self.elapsed_before_start =
+                        self.elapsed_before_start.saturating_sub(RECONNECT_OVERLAP);
                     self.status = "Reconnecting audio...".to_string();
                     self.audio_retry_at = Some(Instant::now() + Duration::from_secs(2));
                     true
@@ -320,7 +333,11 @@ impl Player {
             return false;
         };
         let seek = format!("{:.3}", self.elapsed_before_start.as_secs_f64());
-        match external_command("ffplay")
+        let mut command = external_command("ffplay");
+        if valid_media_url(&path) {
+            command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
+        }
+        match command
             .args(["-ss", &seek, "-nodisp", "-autoexit", &path])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -382,7 +399,11 @@ impl Player {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let child = external_command("ffplay")
+        let mut command = external_command("ffplay");
+        if valid_media_url(&path) {
+            command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
+        }
+        let child = command
             .args([
                 "-ss",
                 &format!("{target:.3}"),
@@ -417,7 +438,7 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use super::Player;
+    use super::{Player, RECONNECT_OVERLAP};
 
     #[cfg(unix)]
     #[test]
@@ -465,6 +486,27 @@ mod tests {
         assert_eq!(player.status, "Reconnecting audio...");
         assert_eq!(player.title.as_deref(), Some("Interrupted stream"));
         assert_eq!(player.queue.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_stream_rewinds_before_reconnecting() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let mut player = Player::new();
+        player.child = Some(Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap());
+        player.title = Some("Interrupted stream".to_string());
+        player.current_path = Some("https://media.example/audio".to_string());
+        player.status = "Playing".to_string();
+        player.playback_started = Some(Instant::now() - Duration::from_secs(30));
+        player.register_stream_duration("https://media.example/audio", Duration::from_secs(180));
+        std::thread::sleep(Duration::from_millis(20));
+
+        assert!(player.is_playing());
+        let expected = Duration::from_secs(30).saturating_sub(RECONNECT_OVERLAP);
+        assert!(player.position() >= expected);
+        assert!(player.position() < Duration::from_secs(27));
     }
 
     #[test]
