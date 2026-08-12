@@ -423,8 +423,8 @@ typing `REMOVE` before changing anything. Package installations are removed
 through `pacman`; on Linux, system package and `/usr/local` removals require
 `sudo`, while a per-user installation and personal data are removed as the
 current user.
-Application removal also deletes the per-user launcher, desktop entry, and icon
-created by `--install-desktop`.
+Application removal also deletes the per-user executable, launcher, desktop
+entry, and icon created by `--install-desktop`.
 After successful removal, it reports the total amount of Crest Player storage
 removed in MiB.
 The command refuses to uninstall when run from a development checkout or an

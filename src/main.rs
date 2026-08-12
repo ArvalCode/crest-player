@@ -363,7 +363,9 @@ fn handle_command_line() -> Result<bool, String> {
             println!();
             println!("Options:");
             println!("  -h, --help         Show this help message and exit");
-            println!("      --install-desktop  Add Crest Player to the application launcher");
+            println!(
+                "      --install-desktop  Install Crest Player and its per-user application launcher"
+            );
             println!("      --remove       Interactively remove Crest Player and its data");
             println!("      --storage      Show application and downloaded-media storage usage");
             println!();
