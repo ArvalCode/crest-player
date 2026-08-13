@@ -303,6 +303,7 @@ fn queue_library_download(
         return;
     }
     app.start_download(path_string.clone(), title.clone());
+    app.error = Some(format!("Downloading {title}…"));
     let sender = sender.clone();
     std::thread::spawn(move || {
         let downloaded = download_audio(&url, &title, video_cache_plan);
@@ -348,6 +349,7 @@ fn process_library_download_completions(
         } else if download.success {
             // This also refreshes availability when an indexed file was missing
             // and the user downloaded it again.
+            app.error = Some(format!("Downloaded {}.", download.title));
             app.add_library_track(download.title, download.path);
             save_library(&app.library);
         } else {
@@ -1102,6 +1104,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     title,
                                     video_cache_plan,
                                 );
+                                needs_redraw = true;
+                            } else {
+                                app.error = Some("No search result is selected.".to_string());
                                 needs_redraw = true;
                             }
                         }

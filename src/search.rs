@@ -59,7 +59,7 @@ pub fn download_audio(
             "2",
             "--no-playlist",
             "-f",
-            "bestaudio",
+            "bestaudio/best",
             "-x",
             "--audio-format",
             "mp3",
