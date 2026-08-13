@@ -18,6 +18,8 @@ ASCII music-video display when left idle.
 - Save compact `.crestvid` caches with embedded lyrics for downloaded tracks.
 - Capture a video frame as the Home wallpaper.
 - Optionally prefetch YouTube Mix recommendations when the queue is empty.
+- Optionally publish the current track, playback state, and elapsed time through
+  Discord Rich Presence.
 - Persist settings in the platform configuration directory; on Linux this is
   normally `~/.config/crest-player/settings.json`.
 
@@ -190,6 +192,19 @@ To run a prebuilt Crest Player executable, the client computer needs:
 Rust, Cargo, Git, and platform compiler tools are needed only when building from
 source; they are not runtime requirements for a prebuilt executable.
 
+### Discord Rich Presence
+
+Start the Discord desktop client and enable **Discord Rich Presence** in Crest
+Player's Settings. Crest Player includes its public Discord Application ID, so
+users do not need to create their own application or provide credentials.
+Developers can optionally override the ID with `CREST_DISCORD_CLIENT_ID`. If
+Discord is closed or unavailable, playback continues normally.
+
+Rich Presence uses the Crest Player application icon through Discord's CDN and
+includes a **View on GitHub** button. Discord hides custom activity buttons from
+the person broadcasting the activity; they are visible to other users viewing
+that person's profile.
+
 Confirm the external runtime tools before starting Crest Player:
 
 ```sh
@@ -358,8 +373,8 @@ For a manual, system-wide installation, copy the launcher and desktop entry too:
 ```sh
 sudo cp packaging/linux/crest-player-launch /usr/local/bin/
 sudo cp packaging/linux/io.github.ArvalCode.CrestPlayer.desktop /usr/share/applications/
-sudo install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer.svg \
-  /usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg
+sudo install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer.png \
+  /usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png
 ```
 
 ## Windows (PowerShell)
@@ -501,7 +516,7 @@ launcher, desktop entry, and icon:
 sudo rm /usr/local/bin/crest-player
 sudo rm /usr/local/bin/crest-player-launch
 sudo rm /usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop
-sudo rm /usr/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg
+sudo rm /usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png
 ```
 
 Older installations may have only `/usr/local/bin/crest-player`; a "No such

@@ -1,5 +1,6 @@
 mod app;
 mod desktop_integration;
+mod discord_presence;
 mod download_commands;
 mod download_queue_ui;
 mod draw_startup_screen;
@@ -27,6 +28,7 @@ use crossterm::{
         SetTitle, disable_raw_mode, enable_raw_mode,
     },
 };
+use discord_presence::DiscordPresence;
 use download_commands::DownloadCommand;
 use draw_startup_screen::{
     DELETE_MEDIA_SETTING, HOME_OPTION_COUNT, REMOVE_APPLICATION_SETTING, RESET_WALLPAPER_SETTING,
@@ -416,6 +418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
     let mut app = App::new();
     let mut player = Player::new();
+    let mut discord_presence = DiscordPresence::new();
     let mut last_tick = Instant::now();
     let mut needs_redraw = true;
     let mut idle_mode = IdleMode::new();
@@ -454,6 +457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             process_library_download_completions(&library_download_rx, &mut app);
             player.is_playing();
+            discord_presence.sync(&app, &player);
             draw_synchronized(&mut terminal, |f| {
                 draw_startup_screen(
                     f,
@@ -479,6 +483,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.hardware_acceleration_enabled,
                         ),
                         autoplay_enabled: app.autoplay_enabled,
+                        discord_presence_enabled: app.discord_presence_enabled,
+                        discord_presence_configured: discord_presence::is_configured(),
                         library_track_count: app.library.len(),
                         home_wallpaper: app.home_wallpaper.as_ref(),
                         playback: (player.title.as_deref(), player.status.as_str()),
@@ -559,6 +565,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 8 => {
                                     app.autoplay_enabled = !app.autoplay_enabled;
+                                }
+                                9 => {
+                                    if discord_presence::is_configured() {
+                                        app.discord_presence_enabled =
+                                            !app.discord_presence_enabled;
+                                        discord_presence.sync(&app, &player);
+                                    } else {
+                                        app.discord_presence_enabled = false;
+                                        app.error = Some(
+                                            "Discord Rich Presence needs CREST_DISCORD_CLIENT_ID."
+                                                .to_string(),
+                                        );
+                                    }
                                 }
                                 DELETE_MEDIA_SETTING => {
                                     app.cancel_active_downloads();
@@ -923,6 +942,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _ => {}
                         }
                         let playing_changed = player.is_playing();
+                        discord_presence.sync(&app, &player);
                         if playing_changed {
                             needs_redraw = true;
                         }
@@ -1165,6 +1185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let playing_changed = player.is_playing();
+            discord_presence.sync(&app, &player);
             if playing_changed {
                 needs_redraw = true;
             }

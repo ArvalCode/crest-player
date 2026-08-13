@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub const HOME_OPTION_COUNT: usize = 3;
-pub const SETTINGS_OPTION_COUNT: usize = 12;
+pub const SETTINGS_OPTION_COUNT: usize = 13;
 pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 3;
 pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
 pub const REMOVE_APPLICATION_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
@@ -17,6 +17,8 @@ pub struct StartupScreenState<'a> {
     pub lyric_settings: (bool, bool, bool),
     pub video_settings: (bool, VideoRenderMode, ColorPrecision, u16, bool),
     pub autoplay_enabled: bool,
+    pub discord_presence_enabled: bool,
+    pub discord_presence_configured: bool,
     pub library_track_count: usize,
     pub home_wallpaper: Option<&'a HomeWallpaper>,
     pub playback: (Option<&'a str>, &'a str),
@@ -28,6 +30,8 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
         lyric_settings,
         video_settings,
         autoplay_enabled,
+        discord_presence_enabled,
+        discord_presence_configured,
         library_track_count,
         home_wallpaper,
         playback,
@@ -153,6 +157,20 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
                 "Prefetch a YouTube Mix recommendation whenever your queue is empty.",
             ),
             (
+                if !discord_presence_configured {
+                    "Discord Rich Presence: NOT CONFIGURED"
+                } else if discord_presence_enabled {
+                    "Discord Rich Presence: ON"
+                } else {
+                    "Discord Rich Presence: OFF"
+                },
+                if discord_presence_configured {
+                    "Share the current track and playback state with the Discord desktop app."
+                } else {
+                    "Set CREST_DISCORD_CLIENT_ID to a Discord Application ID before launching Crest Player."
+                },
+            ),
+            (
                 "Delete All Known Songs/Videos",
                 if library_track_count == 0 {
                     "No downloaded library media is currently tracked by Crest Player."
@@ -241,17 +259,31 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
         } else {
             "Crest Player"
         });
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(4)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Length(art.len() as u16),
-            Constraint::Length(2),
-            Constraint::Length(option_lines.len() as u16),
-            Constraint::Min(1),
-        ])
-        .split(f.area());
+    let layout = if settings_page {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .margin(2)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(0),
+                Constraint::Length(0),
+                Constraint::Min(option_lines.len() as u16),
+                Constraint::Length(1),
+            ])
+            .split(f.area())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .margin(4)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Length(art.len() as u16),
+                Constraint::Length(2),
+                Constraint::Length(option_lines.len() as u16),
+                Constraint::Min(1),
+            ])
+            .split(f.area())
+    };
 
     f.render_widget(block, f.area());
     let art_paragraph = Paragraph::new(art).alignment(Alignment::Center);

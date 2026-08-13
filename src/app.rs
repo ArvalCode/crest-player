@@ -23,6 +23,7 @@ struct PersistedSettings {
     idle_video_fps: u16,
     hardware_acceleration_enabled: bool,
     autoplay_enabled: bool,
+    discord_presence_enabled: bool,
 }
 
 impl Default for PersistedSettings {
@@ -37,6 +38,7 @@ impl Default for PersistedSettings {
             idle_video_fps: 15,
             hardware_acceleration_enabled: false,
             autoplay_enabled: false,
+            discord_presence_enabled: false,
         }
     }
 }
@@ -65,6 +67,7 @@ pub struct App {
     pub idle_video_fps: u16,
     pub hardware_acceleration_enabled: bool,
     pub autoplay_enabled: bool,
+    pub discord_presence_enabled: bool,
     pub downloads: Vec<DownloadJob>,
     cancelled_downloads: HashSet<String>,
     pub home_wallpaper: Option<HomeWallpaper>,
@@ -115,6 +118,7 @@ impl App {
             },
             hardware_acceleration_enabled: settings.hardware_acceleration_enabled,
             autoplay_enabled: settings.autoplay_enabled,
+            discord_presence_enabled: settings.discord_presence_enabled,
             downloads: Vec::new(),
             cancelled_downloads: HashSet::new(),
             home_wallpaper: HomeWallpaper::load(),
@@ -269,6 +273,7 @@ pub fn save_settings(app: &App) {
         idle_video_fps: app.idle_video_fps,
         hardware_acceleration_enabled: app.hardware_acceleration_enabled,
         autoplay_enabled: app.autoplay_enabled,
+        discord_presence_enabled: app.discord_presence_enabled,
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

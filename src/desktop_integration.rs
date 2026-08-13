@@ -9,7 +9,7 @@ const PATH_BLOCK_START: &str = "# >>> crest-player command >>>";
 const PATH_BLOCK_END: &str = "# <<< crest-player command <<<";
 
 #[cfg(unix)]
-const ICON: &str = include_str!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer.svg");
+const ICON: &[u8] = include_bytes!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer.png");
 
 #[cfg(unix)]
 pub fn install() -> Result<(), String> {
@@ -49,6 +49,13 @@ pub fn install() -> Result<(), String> {
         .map_err(|error| format!("could not write {}: {error}", desktop.display()))?;
     std::fs::write(&icon, ICON)
         .map_err(|error| format!("could not write {}: {error}", icon.display()))?;
+    let legacy_icon =
+        home.join(".local/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg");
+    match std::fs::remove_file(legacy_icon) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("could not remove legacy icon: {error}")),
+    }
 
     println!("Crest Player desktop integration installed.");
     println!("Executable:    {}", installed_executable.display());
@@ -101,7 +108,7 @@ fn user_integration_paths(home: &Path) -> [std::path::PathBuf; 4] {
         home.join(".local/bin/crest-player"),
         home.join(".local/bin/crest-player-launch"),
         home.join(".local/share/applications/io.github.ArvalCode.CrestPlayer.desktop"),
-        home.join(".local/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg"),
+        home.join(".local/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png"),
     ]
 }
 
