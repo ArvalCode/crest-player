@@ -146,7 +146,7 @@ struct DownloadFinished {
 struct LibraryDownloadFinished {
     title: String,
     path: String,
-    success: bool,
+    error: Option<String>,
 }
 
 fn queue_youtube_download(
@@ -288,6 +288,10 @@ fn queue_library_download(
         app.error = Some("The Music directory is unavailable.".to_string());
         return;
     };
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        app.error = Some(format!("Could not create the Music directory: {error}"));
+        return;
+    }
     let Ok(path) = contained_media_path(&directory, &title, "_ytmusic.mp3") else {
         app.error =
             Some("The download title could not be converted to a safe filename.".to_string());
@@ -307,15 +311,11 @@ fn queue_library_download(
     let sender = sender.clone();
     std::thread::spawn(move || {
         let downloaded = download_audio(&url, &title, video_cache_plan);
-        let success = downloaded.is_some();
-        let path = downloaded
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or(path_string);
-        let _ = sender.send(LibraryDownloadFinished {
-            title,
-            path,
-            success,
-        });
+        let (path, error) = match downloaded {
+            Ok(path) => (path.to_string_lossy().into_owned(), None),
+            Err(error) => (path_string, Some(error)),
+        };
+        let _ = sender.send(LibraryDownloadFinished { title, path, error });
     });
 }
 
@@ -346,14 +346,18 @@ fn process_library_download_completions(
             let _ = std::fs::remove_file(
                 std::path::Path::new(&download.path).with_extension("crestvid"),
             );
-        } else if download.success {
+        } else if download.error.is_none() {
             // This also refreshes availability when an indexed file was missing
             // and the user downloaded it again.
             app.error = Some(format!("Downloaded {}.", download.title));
             app.add_library_track(download.title, download.path);
             save_library(&app.library);
         } else {
-            app.error = Some(format!("Failed to download {}", download.title));
+            app.error = Some(format!(
+                "Failed to download {}: {}",
+                download.title,
+                download.error.as_deref().unwrap_or("unknown error")
+            ));
         }
         changed = true;
     }

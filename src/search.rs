@@ -47,9 +47,12 @@ pub fn download_audio(
     url: &str,
     title: &str,
     video_cache_plan: Option<(u16, u16, u16)>,
-) -> Option<PathBuf> {
-    let dir = audio_dir()?;
-    let path = contained_media_path(&dir, title, "_ytmusic.mp3").ok()?;
+) -> Result<PathBuf, String> {
+    let dir = audio_dir().ok_or_else(|| "the Music directory is unavailable".to_string())?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("could not create the Music directory: {error}"))?;
+    let path = contained_media_path(&dir, title, "_ytmusic.mp3")
+        .map_err(|error| format!("could not create a safe output path: {error}"))?;
     let mut command = external_command("yt-dlp");
     let status = command
         .args([
@@ -64,15 +67,22 @@ pub fn download_audio(
             "--audio-format",
             "mp3",
             "-o",
-            path.to_str()?,
+            path.to_str()
+                .ok_or_else(|| "the output path is not valid UTF-8".to_string())?,
             url,
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .ok()?;
+        .map_err(|error| format!("could not start yt-dlp: {error}"))?;
     if status.success() {
+        let valid_output = path
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+        if !valid_output {
+            return Err("yt-dlp exited successfully but did not create an MP3".to_string());
+        }
         if let Some((width, height, fps)) = video_cache_plan {
             let video_path = path.with_extension("video.cache");
             let cache_path = path.with_extension("crestvid");
@@ -107,8 +117,9 @@ pub fn download_audio(
             }
             let _ = std::fs::remove_file(video_path);
         }
-        Some(path)
+        Ok(path)
     } else {
-        None
+        let _ = std::fs::remove_file(&path);
+        Err(format!("yt-dlp exited with {status}"))
     }
 }
