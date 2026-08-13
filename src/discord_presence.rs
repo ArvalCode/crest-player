@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CLIENT_ID_ENV: &str = "CREST_DISCORD_CLIENT_ID";
 const DEFAULT_CLIENT_ID: &str = "1537276059186233497";
-const LARGE_IMAGE_URL: &str = "https://cdn.discordapp.com/app-icons/1537276059186233497/294ef8f9e5e8304679bcce19792abd63.png?size=1024";
+const LARGE_IMAGE_URL: &str = "https://cdn.discordapp.com/app-icons/1537276059186233497/137374259d43ff62a94f11b3469499c7.png?size=1024";
 const PROJECT_URL: &str = "https://github.com/ArvalCode/crest-player";
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
