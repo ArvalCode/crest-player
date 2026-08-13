@@ -400,6 +400,21 @@ cargo build --release
 
 Windows Terminal is recommended for ANSI color and Unicode rendering.
 
+Install Crest Player for the current Windows user without administrator rights:
+
+```powershell
+.\target\release\crest-player.exe --install-desktop
+```
+
+This copies the executable to `%LOCALAPPDATA%\Programs\Crest Player`, adds a
+shortcut to the current user's Start Menu, and adds a shortcut to the current
+user's Desktop. It also adds that installation directory to the current user's
+`PATH`, making `crest-player` available in newly opened terminals. Re-running
+the command safely refreshes the installed copy and shortcuts without adding a
+duplicate `PATH` entry. Linux is detected separately and continues to use the per-user
+`~/.local` integration described above; unsupported operating systems return a
+clear error.
+
 ### Playback troubleshooting
 
 - If Crest Player reports that it cannot start `ffplay`, verify that `ffplay` is
@@ -552,11 +567,11 @@ that no other program or project uses them.
 
 ### Windows
 
-First use **Settings > Delete All Known Songs/Videos** if you do not want to keep
-downloaded songs, then quit the player. Delete the cloned `crest-player` folder,
-including its `target` build directory, and delete any copy of
-`crest-player.exe` that you manually placed elsewhere. Remove settings and the
-captured Home wallpaper in PowerShell with:
+Run `crest-player.exe --remove` and select the desired scope. An application
+removal also removes the executable and shortcuts created by
+`--install-desktop`. Delete the cloned `crest-player` folder, including its
+`target` build directory, if it is no longer needed. Remove settings and the
+captured Home wallpaper manually in PowerShell only if they were retained:
 
 ```powershell
 Remove-Item -Recurse -Force "$env:APPDATA\crest-player" -ErrorAction SilentlyContinue
@@ -567,7 +582,7 @@ If in-app deletion was skipped, remove Crest Player's `*_ytmusic.mp3` and
 matching `*_ytmusic.crestvid` files there, plus any matching `.part` or
 `*_ytmusic.video.cache` remnants from interrupted work. Keep those media files
 if you want to retain the downloaded library. Crest Player does not create
-registry entries, scheduled tasks, Start Menu shortcuts, or a Windows service.
+registry entries, scheduled tasks, or a Windows service.
 
 FFmpeg, `yt-dlp`, Rust, Git, and Microsoft C++ Build Tools are separate shared
 installations. They are not part of Crest Player and should be uninstalled only

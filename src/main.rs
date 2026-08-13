@@ -21,7 +21,9 @@ mod wallpaper;
 use app::{App, save_library, save_settings};
 use crossterm::{
     ExecutableCommand,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    },
     execute,
     terminal::{
         BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
@@ -499,6 +501,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
             if event::poll(Duration::from_millis(50))?
                 && let Event::Key(key) = event::read()?
+                && key.kind != KeyEventKind::Release
             {
                 match key.code {
                     KeyCode::Up => {
@@ -746,6 +749,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| Duration::from_secs(0));
             if event::poll(timeout)? {
                 let input_event = event::read()?;
+                // Windows reports separate key-down and key-up events. Handling
+                // both makes every typed character and shortcut fire twice.
+                // Press and Repeat remain actionable so normal key repeat works.
+                if matches!(
+                    &input_event,
+                    Event::Key(key) if key.kind == KeyEventKind::Release
+                ) {
+                    continue;
+                }
                 let was_idle = idle_mode.is_visible();
                 if was_idle {
                     let handled_in_cinema = match &input_event {

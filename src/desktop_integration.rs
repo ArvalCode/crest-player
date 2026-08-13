@@ -1,17 +1,17 @@
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", windows))]
 use std::path::{Path, PathBuf};
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 const PATH_BLOCK_START: &str = "# >>> crest-player command >>>";
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 const PATH_BLOCK_END: &str = "# <<< crest-player command <<<";
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 const ICON: &[u8] = include_bytes!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer.png");
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub fn install() -> Result<(), String> {
     let home = dirs::home_dir().ok_or_else(|| "could not locate the home directory".to_string())?;
     let executable = std::env::current_exe()
@@ -66,7 +66,7 @@ pub fn install() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub fn remove() -> Result<(), String> {
     let home = dirs::home_dir().ok_or_else(|| "could not locate the home directory".to_string())?;
     for path in user_integration_paths(&home) {
@@ -80,29 +80,236 @@ pub fn remove() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub fn paths() -> Vec<std::path::PathBuf> {
     dirs::home_dir()
         .map(|home| user_integration_paths(&home).into_iter().collect())
         .unwrap_or_default()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 pub fn install() -> Result<(), String> {
-    Err("--install-desktop is currently available on Linux only".to_string())
+    let [installed_executable, start_menu_shortcut, desktop_shortcut] =
+        windows_integration_paths()?;
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .map_err(|error| format!("could not locate the Crest Player executable: {error}"))?;
+
+    create_parent(&installed_executable)?;
+    create_parent(&start_menu_shortcut)?;
+    create_parent(&desktop_shortcut)?;
+    install_executable(&executable, &installed_executable)?;
+    create_windows_shortcut(&installed_executable, &start_menu_shortcut)?;
+    create_windows_shortcut(&installed_executable, &desktop_shortcut)?;
+    ensure_windows_command_on_path(&installed_executable)?;
+
+    println!("Crest Player desktop integration installed for Windows.");
+    println!("Executable:          {}", installed_executable.display());
+    println!("Start menu shortcut: {}", start_menu_shortcut.display());
+    println!("Desktop shortcut:    {}", desktop_shortcut.display());
+    println!("The crest-player command is available in newly opened terminals.");
+    Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn remove() -> Result<(), String> {
+    let [installed_executable, start_menu_shortcut, desktop_shortcut] =
+        windows_integration_paths()?;
+    // The running installed executable is removed by uninstall.rs after this
+    // process exits. Trying to delete it here fails on Windows due to file
+    // locking and aborts the rest of the removal flow.
+    for path in [start_menu_shortcut, desktop_shortcut] {
+        remove_file_if_present(&path)?;
+    }
+    remove_windows_command_from_path(&installed_executable)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn paths() -> Vec<PathBuf> {
+    windows_integration_paths()
+        .map(|paths| paths.into_iter().collect())
+        .unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn install() -> Result<(), String> {
+    Err(format!(
+        "--install-desktop is not supported on {}",
+        std::env::consts::OS
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn remove() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn paths() -> Vec<std::path::PathBuf> {
     Vec::new()
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn windows_integration_paths() -> Result<[PathBuf; 3], String> {
+    let local_data = dirs::data_local_dir()
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "could not locate the local application data directory".to_string())?;
+    let roaming_data = dirs::data_dir()
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "could not locate the roaming application data directory".to_string())?;
+    let desktop = dirs::desktop_dir()
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "could not locate the Desktop directory".to_string())?;
+    Ok([
+        local_data.join("Programs/Crest Player/crest-player.exe"),
+        roaming_data.join("Microsoft/Windows/Start Menu/Programs/Crest Player.lnk"),
+        desktop.join("Crest Player.lnk"),
+    ])
+}
+
+#[cfg(windows)]
+fn install_executable(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination
+        .canonicalize()
+        .ok()
+        .as_deref()
+        .is_some_and(|installed| installed == source)
+    {
+        return Ok(());
+    }
+
+    let parent = destination
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", destination.display()))?;
+    let temporary = parent.join(format!(".crest-player-install-{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut input = std::fs::File::open(source)
+            .map_err(|error| format!("could not read {}: {error}", source.display()))?;
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
+        std::io::copy(&mut input, &mut output)
+            .map_err(|error| format!("could not copy Crest Player: {error}"))?;
+        output.sync_all().map_err(|error| {
+            format!("could not finish writing {}: {error}", temporary.display())
+        })?;
+        remove_file_if_present(destination)?;
+        std::fs::rename(&temporary, destination)
+            .map_err(|error| format!("could not install {}: {error}", destination.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn create_parent(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("could not create {}: {error}", parent.display()))
+}
+
+#[cfg(windows)]
+fn create_windows_shortcut(target: &Path, shortcut: &Path) -> Result<(), String> {
+    const SCRIPT: &str = concat!(
+        "$ErrorActionPreference='Stop';",
+        "$shell=New-Object -ComObject WScript.Shell;",
+        "$link=$shell.CreateShortcut($env:CREST_SHORTCUT);",
+        "$link.TargetPath=$env:CREST_TARGET;",
+        "$link.WorkingDirectory=$env:CREST_WORKING_DIRECTORY;",
+        "$link.Description='Terminal music player';",
+        "$link.IconLocation=$env:CREST_TARGET + ',0';",
+        "$link.Save()"
+    );
+    let working_directory = target
+        .parent()
+        .ok_or_else(|| "installed executable has no parent directory".to_string())?;
+    let status = crate::security::external_command("powershell")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            SCRIPT,
+        ])
+        .env("CREST_TARGET", target)
+        .env("CREST_SHORTCUT", shortcut)
+        .env("CREST_WORKING_DIRECTORY", working_directory)
+        .status()
+        .map_err(|error| format!("could not start the Windows shortcut installer: {error}"))?;
+    if !status.success() || !shortcut.is_file() {
+        return Err(format!("could not create {}", shortcut.display()));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn ensure_windows_command_on_path(executable: &Path) -> Result<(), String> {
+    let directory = executable
+        .parent()
+        .ok_or_else(|| "installed executable has no parent directory".to_string())?;
+    update_windows_user_path(directory, false)
+}
+
+#[cfg(windows)]
+fn remove_windows_command_from_path(executable: &Path) -> Result<(), String> {
+    let directory = executable
+        .parent()
+        .ok_or_else(|| "installed executable has no parent directory".to_string())?;
+    update_windows_user_path(directory, true)
+}
+
+#[cfg(windows)]
+fn update_windows_user_path(directory: &Path, remove: bool) -> Result<(), String> {
+    const SCRIPT: &str = concat!(
+        "$ErrorActionPreference='Stop';",
+        "function Normalize-PathEntry($value){try{return [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($value)).TrimEnd('\\')}catch{return $value.TrimEnd('\\')}};",
+        "$target=Normalize-PathEntry $env:CREST_PATH_ENTRY;",
+        "$current=[Environment]::GetEnvironmentVariable('Path','User');",
+        "$parts=@($current -split ';' | Where-Object { $_ -and ((Normalize-PathEntry $_) -ine $target) });",
+        "if($env:CREST_PATH_REMOVE -ne '1'){$parts += $target};",
+        "$updated=($parts -join ';');",
+        "if($updated.Length -gt 32767){throw 'The user PATH is too long'};",
+        "[Environment]::SetEnvironmentVariable('Path',$updated,'User')"
+    );
+    let status = crate::security::external_command("powershell")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            SCRIPT,
+        ])
+        .env("CREST_PATH_ENTRY", directory)
+        .env("CREST_PATH_REMOVE", if remove { "1" } else { "0" })
+        .status()
+        .map_err(|error| format!("could not update the Windows user PATH: {error}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| "could not update the Windows user PATH".to_string())
+}
+
+#[cfg(windows)]
+fn remove_file_if_present(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not remove {}: {error}", path.display())),
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn user_integration_paths(home: &Path) -> [std::path::PathBuf; 4] {
     [
         home.join(".local/bin/crest-player"),
@@ -112,7 +319,7 @@ fn user_integration_paths(home: &Path) -> [std::path::PathBuf; 4] {
     ]
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn install_executable(source: &Path, destination: &Path) -> Result<(), String> {
     if destination
         .canonicalize()
@@ -154,7 +361,7 @@ fn install_executable(source: &Path, destination: &Path) -> Result<(), String> {
     result
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn temporary_install_path(destination: &Path) -> Result<PathBuf, String> {
     let parent = destination
         .parent()
@@ -162,7 +369,7 @@ fn temporary_install_path(destination: &Path) -> Result<PathBuf, String> {
     Ok(parent.join(format!(".crest-player.install-{}.tmp", std::process::id())))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn create_parent(path: &Path) -> Result<(), String> {
     let parent = path
         .parent()
@@ -171,7 +378,7 @@ fn create_parent(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("could not create {}: {error}", parent.display()))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn ensure_command_on_path(home: &Path) -> Result<(), String> {
     let shell_block = format!(
         "{PATH_BLOCK_START}\ncase \":$PATH:\" in\n  *:\"$HOME/.local/bin\":*) ;;\n  *) export PATH=\"$HOME/.local/bin:$PATH\" ;;\nesac\n{PATH_BLOCK_END}\n"
@@ -195,7 +402,7 @@ fn ensure_command_on_path(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn append_managed_block(path: &Path, block: &str) -> Result<(), String> {
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     if existing.contains(PATH_BLOCK_START) {
@@ -216,7 +423,7 @@ fn append_managed_block(path: &Path, block: &str) -> Result<(), String> {
         .map_err(|error| format!("could not update {}: {error}", path.display()))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn remove_command_path_settings(home: &Path) -> Result<(), String> {
     for path in [
         home.join(".profile"),
@@ -246,12 +453,12 @@ fn remove_command_path_settings(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn desktop_exec_path(value: &str) -> String {
     format!(
         "\"{}\"",
@@ -263,7 +470,7 @@ fn desktop_exec_path(value: &str) -> String {
     )
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::{
         PATH_BLOCK_START, desktop_exec_path, ensure_command_on_path, remove_command_path_settings,

@@ -1,6 +1,11 @@
 use crate::app::{App, save_library};
-use crate::security::{bounded_output, external_command};
+#[cfg(unix)]
+use crate::security::bounded_output;
+use crate::security::external_command;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -10,17 +15,23 @@ pub fn remove_crest_player() -> Result<(), String> {
         return Err("usage: crest-player --remove".to_string());
     }
 
-    remove_crest_player_interactively()
+    remove_crest_player_interactively(InputMode::Standard)
 }
 
 /// Runs the same complete removal flow from the in-application Settings page.
 /// The caller must restore the terminal before invoking this so stdin, sudo,
 /// and the confirmation prompts are visible to the user.
 pub fn remove_crest_player_from_settings() -> Result<(), String> {
-    remove_crest_player_interactively()
+    remove_crest_player_interactively(InputMode::Crossterm)
 }
 
-fn remove_crest_player_interactively() -> Result<(), String> {
+#[derive(Clone, Copy)]
+enum InputMode {
+    Standard,
+    Crossterm,
+}
+
+fn remove_crest_player_interactively(input_mode: InputMode) -> Result<(), String> {
     println!("Crest Player removal");
     println!();
     println!("Choose what to remove:");
@@ -28,14 +39,7 @@ fn remove_crest_player_interactively() -> Result<(), String> {
     println!("  2. Music and video only (keep the application and settings)");
     println!("  3. Everything (application, media, and settings)");
     println!();
-    print!("Enter 1, 2, or 3: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("could not display the removal menu: {error}"))?;
-    let mut selection = String::new();
-    io::stdin()
-        .read_line(&mut selection)
-        .map_err(|error| format!("could not read the removal selection: {error}"))?;
+    let selection = prompt_line("Enter 1, 2, or 3: ", input_mode)?;
     let choice = RemovalChoice::parse(selection.trim())?;
 
     let installation = if choice.removes_application() {
@@ -58,15 +62,7 @@ fn remove_crest_player_interactively() -> Result<(), String> {
     {
         println!("Removing the installed application files will require sudo.");
     }
-    print!("Type REMOVE to continue: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("could not display the confirmation prompt: {error}"))?;
-
-    let mut confirmation = String::new();
-    io::stdin()
-        .read_line(&mut confirmation)
-        .map_err(|error| format!("could not read confirmation: {error}"))?;
+    let confirmation = prompt_line("Type REMOVE to continue: ", input_mode)?;
     if confirmation.trim() != "REMOVE" {
         println!("Removal cancelled. No files were changed.");
         return Ok(());
@@ -88,6 +84,78 @@ fn remove_crest_player_interactively() -> Result<(), String> {
         removal_bytes as f64 / (1024.0 * 1024.0)
     );
     Ok(())
+}
+
+fn prompt_line(prompt: &str, input_mode: InputMode) -> Result<String, String> {
+    print!("{prompt}");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("could not display the removal prompt: {error}"))?;
+    match input_mode {
+        InputMode::Standard => {
+            let mut input = String::new();
+            io::stdin()
+                .read_line(&mut input)
+                .map_err(|error| format!("could not read removal input: {error}"))?;
+            Ok(input)
+        }
+        InputMode::Crossterm => read_crossterm_line(),
+    }
+}
+
+fn read_crossterm_line() -> Result<String, String> {
+    enable_raw_mode().map_err(|error| format!("could not enable removal input: {error}"))?;
+    let result = (|| {
+        let mut input = String::new();
+        loop {
+            let input_event =
+                event::read().map_err(|error| format!("could not read removal input: {error}"))?;
+            let Event::Key(key) = input_event else {
+                continue;
+            };
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+            match (key.code, key.modifiers) {
+                (KeyCode::Enter, _) => {
+                    println!();
+                    return Ok(input);
+                }
+                (KeyCode::Esc, _) => {
+                    println!();
+                    return Ok(String::new());
+                }
+                (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    println!();
+                    return Ok(String::new());
+                }
+                (KeyCode::Backspace, _) if !input.is_empty() => {
+                    input.pop();
+                    print!("\u{8} \u{8}");
+                    io::stdout()
+                        .flush()
+                        .map_err(|error| format!("could not update removal input: {error}"))?;
+                }
+                (KeyCode::Char(character), modifiers)
+                    if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    input.push(character);
+                    print!("{character}");
+                    io::stdout()
+                        .flush()
+                        .map_err(|error| format!("could not update removal input: {error}"))?;
+                }
+                _ => {}
+            }
+        }
+    })();
+    let restore = disable_raw_mode()
+        .map_err(|error| format!("could not restore the terminal after removal input: {error}"));
+    match (result, restore) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(input), Ok(())) => Ok(input),
+    }
 }
 
 #[derive(Clone, Copy)]
