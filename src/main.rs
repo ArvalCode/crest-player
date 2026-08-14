@@ -48,9 +48,7 @@ use ratatui::Terminal;
 use ratatui::prelude::CrosstermBackend;
 use recommendations::{Recommendation, youtube_mix_recommendation};
 use search::{download_audio, search_youtube};
-use security::{
-    bounded_output, contained_media_path, external_command, valid_media_url, valid_youtube_id,
-};
+use security::{contained_media_path, external_command, valid_youtube_id};
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 use ui_with_player::ui_with_player;
@@ -257,7 +255,14 @@ fn next_stream_queue_path() -> String {
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    format!("crest-stream-pending:{}:{id}", std::process::id())
+    std::env::temp_dir()
+        .join(format!(
+            "ytmusic_play_{}_{}.mp3",
+            std::process::id(),
+            id
+        ))
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn queue_youtube_download(
@@ -287,7 +292,9 @@ fn queue_youtube_download(
 
     let sender = sender.clone();
     let title = title.to_string();
+    let download_path = queue_path.clone();
     std::thread::spawn(move || {
+        let _ = std::fs::remove_file(&download_path);
         let mut command = external_command("yt-dlp");
         command.args([
             "--socket-timeout",
@@ -297,40 +304,32 @@ fn queue_youtube_download(
             "--no-playlist",
             "-f",
             "bestaudio/best",
-            "--print",
-            "%(duration)s",
-            "-g",
+            "-x",
+            "--audio-format",
+            "mp3",
+            "--force-overwrites",
+            "-o",
+            &download_path,
             &url,
         ]);
-        let output = bounded_output(command, 64 * 1024);
-        let output_lines: Vec<String> = output
-            .as_ref()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let duration = output_lines
-            .first()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .map(Duration::from_secs_f64);
-        let playback_path = output_lines
-            .iter()
-            .find(|path| valid_media_url(path.trim()))
-            .cloned()
-            .unwrap_or_default();
-        let success = output.as_ref().is_ok_and(|output| output.status.success())
-            && !playback_path.is_empty();
+        let status = command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let success = status.is_ok_and(|status| status.success())
+            && std::fs::metadata(&download_path)
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+        if !success {
+            let _ = std::fs::remove_file(&download_path);
+        }
 
         let _ = sender.send(DownloadFinished {
             title,
             queue_path,
-            playback_path,
+            playback_path: download_path,
             youtube_url: url,
-            duration,
+            duration: None,
             autoplay,
             success,
         });
@@ -377,6 +376,10 @@ fn process_download_completions(
                 app.error = Some(format!("Failed to download {}", download.title));
             }
             changed = true;
+        } else {
+            // The user removed the pending queue item before its background
+            // download completed. Do not leak the completed temporary MP3.
+            let _ = std::fs::remove_file(&download.playback_path);
         }
     }
     changed
