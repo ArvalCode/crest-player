@@ -256,11 +256,7 @@ fn next_stream_queue_path() -> String {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
-        .join(format!(
-            "ytmusic_play_{}_{}.mp3",
-            std::process::id(),
-            id
-        ))
+        .join(format!("ytmusic_play_{}_{}.mp3", std::process::id(), id))
         .to_string_lossy()
         .into_owned()
 }
