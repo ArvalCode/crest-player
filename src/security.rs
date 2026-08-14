@@ -87,15 +87,17 @@ pub fn contained_media_path(root: &Path, title: &str, suffix: &str) -> io::Resul
 /// Resolve tools only through absolute PATH entries. This prevents an empty or
 /// relative PATH entry from executing a program planted in the working directory.
 pub fn external_command(name: &str) -> Command {
-    let resolved = std::env::var_os("PATH")
+    Command::new(external_command_path(name).unwrap_or_else(|| missing_executable_path(name)))
+}
+
+pub fn external_command_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .filter(|directory| directory.is_absolute())
         .flat_map(|directory| executable_candidates(directory, name))
         .find(|candidate| candidate.is_file())
-        .and_then(|candidate| candidate.canonicalize().ok());
-
-    Command::new(resolved.unwrap_or_else(|| missing_executable_path(name)))
+        .and_then(|candidate| candidate.canonicalize().ok())
 }
 
 fn executable_candidates(directory: PathBuf, name: &str) -> Vec<PathBuf> {

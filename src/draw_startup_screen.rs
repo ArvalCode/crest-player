@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub const HOME_OPTION_COUNT: usize = 3;
-pub const SETTINGS_OPTION_COUNT: usize = 13;
+pub const SETTINGS_OPTION_COUNT: usize = 14;
 pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 3;
 pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
 pub const REMOVE_APPLICATION_SETTING: usize = SETTINGS_OPTION_COUNT - 1;
@@ -171,6 +171,10 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
                 },
             ),
             (
+                "Speakers...",
+                "Automatically find and connect to AirPlay or Sonos speakers on this Wi-Fi network.",
+            ),
+            (
                 "Delete All Known Songs/Videos",
                 if library_track_count == 0 {
                     "No downloaded library media is currently tracked by Crest Player."
@@ -289,7 +293,16 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
     let art_paragraph = Paragraph::new(art).alignment(Alignment::Center);
     f.render_widget(art_paragraph, layout[1]);
 
-    let options_paragraph = Paragraph::new(option_lines).alignment(Alignment::Center);
+    let available_lines = usize::from(layout[3].height);
+    let selected_line = selected + 1;
+    let scroll = if settings_page && selected_line >= available_lines {
+        (selected_line + 1 - available_lines) as u16
+    } else {
+        0
+    };
+    let options_paragraph = Paragraph::new(option_lines)
+        .alignment(Alignment::Center)
+        .scroll((scroll, 0));
     f.render_widget(options_paragraph, layout[3]);
 
     let hint = Paragraph::new(hint_text).alignment(Alignment::Center);

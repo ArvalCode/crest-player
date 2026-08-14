@@ -37,7 +37,7 @@ pub fn ui_downloaded_only(f: &mut Frame, app: &App, player: &Player) {
     let input = Paragraph::new(app.input.as_str()).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Library Commands (:shuffle queue · :shuffle all · :clear)"),
+            .title("Commands (:shuffle queue · :shuffle all · :clear · :cast …)"),
     );
     f.render_widget(input, vchunks[0]);
 

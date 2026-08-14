@@ -7,6 +7,10 @@ license = "MIT"
 repository = "https://github.com/ArvalCode/crest-player"
 readme = "README.md"
 
+[features]
+default = ["casting"]
+casting = []
+
 [dependencies]
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"

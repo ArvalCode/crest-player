@@ -1,11 +1,12 @@
 use crate::app::{App, save_library};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use crate::security::bounded_output;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use crate::security::external_command;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::collections::HashSet;
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -55,7 +56,7 @@ fn remove_crest_player_interactively(input_mode: InputMode) -> Result<(), String
     println!();
     println!("Selected: {}", choice.label());
     println!("Music files not recorded in Crest Player's index will not be touched.");
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if installation
         .as_ref()
         .is_some_and(Installation::requires_privilege)
@@ -326,24 +327,31 @@ fn remove_file_if_present(path: &Path) -> Result<(), String> {
 }
 
 enum Installation {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     SystemPackage(String),
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     ManualSystem,
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     ManualUser(PathBuf),
+    #[cfg(target_os = "macos")]
+    MacSystem(PathBuf),
+    #[cfg(target_os = "macos")]
+    MacUser(PathBuf),
     #[cfg(windows)]
     Windows(PathBuf),
 }
 
 impl Installation {
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn requires_privilege(&self) -> bool {
-        matches!(self, Self::SystemPackage(_) | Self::ManualSystem)
+        #[cfg(target_os = "linux")]
+        return matches!(self, Self::SystemPackage(_) | Self::ManualSystem);
+        #[cfg(target_os = "macos")]
+        return matches!(self, Self::MacSystem(_));
     }
 
     fn detect(executable: &Path) -> Result<Self, String> {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             if executable == Path::new("/usr/bin/crest-player") {
                 if let Some(package) = owning_crest_package(executable) {
@@ -368,14 +376,52 @@ impl Installation {
                 executable.display()
             ))
         }
+        #[cfg(target_os = "macos")]
+        {
+            let system_locations = [
+                Path::new("/usr/local/bin/crest-player"),
+                Path::new("/opt/homebrew/bin/crest-player"),
+            ];
+            if system_locations.contains(&executable) {
+                return Ok(Self::MacSystem(executable.to_path_buf()));
+            }
+            if let Some(home) = dirs::home_dir() {
+                let user_binary = home.join(".local/bin/crest-player");
+                if executable == user_binary {
+                    return Ok(Self::MacUser(user_binary));
+                }
+            }
+            Err(format!(
+                "{} is not a recognized macOS Crest Player installation; no files were changed",
+                executable.display()
+            ))
+        }
         #[cfg(windows)]
         {
-            Ok(Self::Windows(executable.to_path_buf()))
+            let installed = dirs::data_local_dir()
+                .filter(|path| path.is_absolute())
+                .ok_or_else(|| "could not locate the local application data directory".to_string())?
+                .join("Programs/Crest Player/crest-player.exe");
+            if executable == installed {
+                Ok(Self::Windows(installed))
+            } else {
+                Err(format!(
+                    "{} is not the recognized per-user Windows installation; no files were changed",
+                    executable.display()
+                ))
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            Err(format!(
+                "application removal is not supported on {}; no files were changed",
+                std::env::consts::OS
+            ))
         }
     }
 
     fn remove(self) -> Result<(), String> {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             match self {
                 Self::SystemPackage(package) => run_privileged(&[
@@ -412,16 +458,29 @@ impl Installation {
                 }
             }
         }
+        #[cfg(target_os = "macos")]
+        {
+            match self {
+                Self::MacSystem(path) => {
+                    run_privileged(&[OsStr::new("rm"), OsStr::new("-f"), path.as_os_str()])
+                }
+                Self::MacUser(path) => remove_file_if_present(&path),
+            }
+        }
         #[cfg(windows)]
         {
             schedule_windows_executable_removal(&match self {
                 Self::Windows(path) => path,
             })
         }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            match self {}
+        }
     }
 
     fn installed_paths(&self) -> Vec<PathBuf> {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             match self {
                 Self::SystemPackage(_) => vec![
@@ -458,16 +517,26 @@ impl Installation {
                 ],
             }
         }
+        #[cfg(target_os = "macos")]
+        {
+            match self {
+                Self::MacSystem(path) | Self::MacUser(path) => vec![path.clone()],
+            }
+        }
         #[cfg(windows)]
         {
             match self {
                 Self::Windows(path) => vec![path.clone()],
             }
         }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            match self {}
+        }
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn owning_crest_package(executable: &Path) -> Option<String> {
     let mut command = external_command("pacman");
     command.args([OsStr::new("-Qoq"), executable.as_os_str()]);
@@ -480,7 +549,7 @@ fn owning_crest_package(executable: &Path) -> Option<String> {
     matches!(package, "crest-player" | "crest-player-git").then(|| package.to_string())
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_privileged(arguments: &[&OsStr]) -> Result<(), String> {
     let (program, arguments) = arguments
         .split_first()

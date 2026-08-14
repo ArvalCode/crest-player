@@ -1,3 +1,5 @@
+#[cfg(feature = "casting")]
+use crate::casting::{CastTarget, Caster};
 use crate::security::{external_command, sanitize_display_text_limited, valid_media_url};
 use std::collections::HashMap;
 use std::process::{Child, Stdio};
@@ -20,6 +22,9 @@ pub struct Player {
     video_sources: HashMap<String, Arc<str>>,
     stream_durations: HashMap<String, Duration>,
     audio_retry_at: Option<Instant>,
+    cast_clock_calibrated: bool,
+    #[cfg(feature = "casting")]
+    caster: Caster,
 }
 
 impl Player {
@@ -37,6 +42,9 @@ impl Player {
             video_sources: HashMap::new(),
             stream_durations: HashMap::new(),
             audio_retry_at: None,
+            cast_clock_calibrated: false,
+            #[cfg(feature = "casting")]
+            caster: Caster::new(),
         }
     }
 
@@ -102,12 +110,8 @@ impl Player {
             self.last_temp_file = None;
         }
 
-        let mut command = external_command("ffplay");
-        if valid_media_url(&play_path) {
-            command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
-        }
+        let mut command = self.audio_clock_command(&play_path, None);
         let child = command
-            .args(["-nodisp", "-autoexit", &play_path])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -117,13 +121,18 @@ impl Player {
             return;
         };
         self.child = Some(child);
-        self.current_path = Some(play_path);
+        self.current_path = Some(play_path.clone());
         self.title = Some(title.to_string());
         self.last_finished_title = None;
         self.audio_retry_at = None;
+        self.cast_clock_calibrated = false;
         self.status = "Playing".to_string();
         self.elapsed_before_start = Duration::default();
         self.playback_started = Some(Instant::now());
+        #[cfg(feature = "casting")]
+        if let Err(error) = self.caster.play(&play_path) {
+            self.status = error;
+        }
     }
 
     pub fn register_video_source(&mut self, audio_path: &str, youtube_url: &str) {
@@ -207,6 +216,8 @@ impl Player {
             if let Some(started) = self.playback_started.take() {
                 self.elapsed_before_start += started.elapsed();
             }
+            #[cfg(feature = "casting")]
+            self.caster.pause();
         }
     }
     pub fn resume(&mut self) {
@@ -217,9 +228,13 @@ impl Player {
                 .status();
             self.status = "Playing".to_string();
             self.playback_started = Some(Instant::now());
+            #[cfg(feature = "casting")]
+            self.caster.resume();
         }
     }
     pub fn stop(&mut self) {
+        #[cfg(feature = "casting")]
+        self.caster.stop();
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -255,6 +270,14 @@ impl Player {
     }
     pub fn is_playing(&mut self) -> bool {
         use std::fs;
+        #[cfg(feature = "casting")]
+        if !self.cast_clock_calibrated
+            && let Some(started_at) = self.caster.stream_started_at()
+        {
+            self.playback_started = Some(started_at);
+            self.elapsed_before_start = Duration::default();
+            self.cast_clock_calibrated = true;
+        }
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(Some(exit_status)) if exit_status.success() && self.reached_expected_end() => {
@@ -333,12 +356,8 @@ impl Player {
             return false;
         };
         let seek = format!("{:.3}", self.elapsed_before_start.as_secs_f64());
-        let mut command = external_command("ffplay");
-        if valid_media_url(&path) {
-            command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
-        }
+        let mut command = self.audio_clock_command(&path, Some(&seek));
         match command
-            .args(["-ss", &seek, "-nodisp", "-autoexit", &path])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -377,6 +396,10 @@ impl Player {
     }
 
     pub fn position(&self) -> Duration {
+        #[cfg(feature = "casting")]
+        if !self.cast_clock_calibrated && self.caster.is_waiting_for_stream() {
+            return self.elapsed_before_start;
+        }
         self.elapsed_before_start
             + self
                 .playback_started
@@ -399,18 +422,9 @@ impl Player {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let mut command = external_command("ffplay");
-        if valid_media_url(&path) {
-            command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
-        }
+        let target_string = format!("{target:.3}");
+        let mut command = self.audio_clock_command(&path, Some(&target_string));
         let child = command
-            .args([
-                "-ss",
-                &format!("{target:.3}"),
-                "-nodisp",
-                "-autoexit",
-                &path,
-            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -433,6 +447,76 @@ impl Player {
             self.playback_started = Some(Instant::now());
             self.status = "Playing".to_string();
         }
+        #[cfg(feature = "casting")]
+        self.caster.seek_to(Duration::from_secs_f64(target));
+    }
+
+    #[cfg(feature = "casting")]
+    pub fn set_cast_target(&mut self, target: CastTarget) -> String {
+        self.caster.connect(target)
+    }
+
+    #[cfg(feature = "casting")]
+    pub fn disable_casting(&mut self) -> String {
+        self.caster.off()
+    }
+
+    #[cfg(feature = "casting")]
+    pub fn cast_status(&self) -> String {
+        self.caster.status()
+    }
+
+    #[cfg(feature = "casting")]
+    pub fn cast_targets(&self) -> &[CastTarget] {
+        self.caster.targets()
+    }
+
+    fn casting_active(&self) -> bool {
+        #[cfg(feature = "casting")]
+        {
+            self.caster.is_active()
+        }
+        #[cfg(not(feature = "casting"))]
+        {
+            false
+        }
+    }
+
+    fn audio_clock_command(&self, path: &str, seek: Option<&str>) -> std::process::Command {
+        if self.casting_active() {
+            // Casting must not depend on a working local audio device. Decode at
+            // input speed into FFmpeg's null muxer to retain timing, queue
+            // progression, seeking, lyrics, and video synchronization.
+            let mut command = external_command("ffmpeg");
+            command.args(["-nostdin", "-loglevel", "error"]);
+            if let Some(seek) = seek {
+                command.args(["-ss", seek]);
+            }
+            if valid_media_url(path) {
+                command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
+            }
+            command.args(["-re", "-i", path, "-map", "0:a:0", "-f", "null", "-"]);
+            command
+        } else {
+            let mut command = external_command("ffplay");
+            if valid_media_url(path) {
+                command.args(["-rw_timeout", STREAM_READ_TIMEOUT_MICROS]);
+            }
+            if let Some(seek) = seek {
+                command.args(["-ss", seek]);
+            }
+            command.args(["-nodisp", "-autoexit", path]);
+            command
+        }
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        // Normal quit paths call stop explicitly, but this also covers early
+        // returns caused by terminal or rendering errors.
+        self.stop();
+        self.cleanup_temp_media();
     }
 }
 

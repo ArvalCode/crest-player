@@ -1,4 +1,6 @@
 mod app;
+#[cfg(feature = "casting")]
+mod casting;
 mod desktop_integration;
 mod discord_presence;
 mod download_commands;
@@ -19,6 +21,8 @@ mod video_screensaver;
 mod wallpaper;
 
 use app::{App, save_library, save_settings};
+#[cfg(feature = "casting")]
+use casting::CastCommand;
 use crossterm::{
     ExecutableCommand,
     event::{
@@ -51,6 +55,29 @@ use std::time::{Duration, Instant};
 use ui_with_player::ui_with_player;
 use video_screensaver::VideoScreensaver;
 use wallpaper::HomeWallpaper;
+
+fn handle_cast_command(input: &str, player: &mut Player) -> Option<String> {
+    if !input.trim_start().starts_with(":cast") {
+        return None;
+    }
+    #[cfg(feature = "casting")]
+    {
+        Some(match CastCommand::parse(input) {
+            Ok(CastCommand::Connect(target)) => player.set_cast_target(target),
+            Ok(CastCommand::Off) => player.disable_casting(),
+            Ok(CastCommand::Status) => player.cast_status(),
+            Err(message) => message,
+        })
+    }
+    #[cfg(not(feature = "casting"))]
+    {
+        let _ = player;
+        Some(
+            "Casting is not in this build. Rebuild with: cargo build --release --features casting"
+                .to_string(),
+        )
+    }
+}
 
 struct FramePacer {
     fps: u16,
@@ -448,6 +475,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut startup_selected = 0; // 0 = stream+downloaded, 1 = downloaded only
     let mut settings_selected = 0;
     let mut removal_requested = false;
+    #[cfg(feature = "casting")]
+    let mut speakers_page = false;
+    #[cfg(feature = "casting")]
+    let mut speaker_selected = 0usize;
+    #[cfg(feature = "casting")]
+    let mut discovered_speakers = Vec::new();
+    #[cfg(feature = "casting")]
+    let mut speaker_discovery: Option<casting::DiscoveryHandle> = None;
+    #[cfg(feature = "casting")]
+    let mut speaker_notice: Option<String> = None;
 
     'home: loop {
         // --- Startup screen state ---
@@ -466,7 +503,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             process_library_download_completions(&library_download_rx, &mut app);
             player.is_playing();
             discord_presence.sync(&app, &player);
+            #[cfg(feature = "casting")]
+            if let Some(receiver) = &speaker_discovery
+                && let Ok(result) = receiver.try_recv()
+            {
+                discovered_speakers = result.devices;
+                speaker_notice = result.notice;
+                speaker_selected =
+                    speaker_selected.min(discovered_speakers.len().saturating_sub(1));
+                speaker_discovery = None;
+            }
             draw_synchronized(&mut terminal, |f| {
+                #[cfg(feature = "casting")]
+                if speakers_page {
+                    casting::draw_speakers_page(
+                        f,
+                        &discovered_speakers,
+                        speaker_selected,
+                        speaker_discovery.is_some(),
+                        &player.cast_status(),
+                        speaker_notice.as_deref(),
+                        player.cast_targets(),
+                    );
+                    return;
+                }
                 draw_startup_screen(
                     f,
                     StartupScreenState {
@@ -503,6 +563,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && let Event::Key(key) = event::read()?
                 && key.kind != KeyEventKind::Release
             {
+                #[cfg(feature = "casting")]
+                if speakers_page {
+                    match key.code {
+                        KeyCode::Up => {
+                            speaker_selected = speaker_selected.saturating_sub(1);
+                        }
+                        KeyCode::Down => {
+                            speaker_selected = (speaker_selected + 1)
+                                .min(discovered_speakers.len().saturating_sub(1));
+                        }
+                        KeyCode::Enter => {
+                            if let Some(device) = discovered_speakers.get(speaker_selected) {
+                                app.error = Some(player.set_cast_target(device.target.clone()));
+                            }
+                        }
+                        KeyCode::Char('r') | KeyCode::Char('R') => {
+                            discovered_speakers.clear();
+                            speaker_notice = None;
+                            speaker_selected = 0;
+                            speaker_discovery = Some(casting::start_discovery());
+                        }
+                        KeyCode::Char('d') | KeyCode::Char('D') => {
+                            app.error = Some(player.disable_casting());
+                        }
+                        KeyCode::Esc => {
+                            speakers_page = false;
+                            speaker_discovery = None;
+                        }
+                        KeyCode::Left
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
+                            speakers_page = false;
+                            speaker_discovery = None;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 match key.code {
                     KeyCode::Up => {
                         if settings_page {
@@ -584,6 +684,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         app.discord_presence_enabled = false;
                                         app.error = Some(
                                             "Discord Rich Presence needs CREST_DISCORD_CLIENT_ID."
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                                10 => {
+                                    #[cfg(feature = "casting")]
+                                    {
+                                        speakers_page = true;
+                                        speaker_selected = 0;
+                                        if discovered_speakers.is_empty()
+                                            && speaker_discovery.is_none()
+                                        {
+                                            speaker_discovery = Some(casting::start_discovery());
+                                        }
+                                    }
+                                    #[cfg(not(feature = "casting"))]
+                                    {
+                                        app.error = Some(
+                                            "Speaker discovery is unavailable in this build."
                                                 .to_string(),
                                         );
                                     }
@@ -896,12 +1015,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             (KeyCode::Enter, m) if m.is_empty() => {
                                 if !app.input.trim().is_empty() {
-                                    app.error = Some(match DownloadCommand::parse(&app.input) {
-                                        Ok(command) => {
-                                            command.execute(&app.library, &mut player.queue)
-                                        }
-                                        Err(message) => message,
-                                    });
+                                    app.error = Some(
+                                        handle_cast_command(&app.input, &mut player)
+                                            .unwrap_or_else(|| {
+                                                match DownloadCommand::parse(&app.input) {
+                                                    Ok(command) => command
+                                                        .execute(&app.library, &mut player.queue),
+                                                    Err(message) => message,
+                                                }
+                                            }),
+                                    );
                                     app.input.clear();
                                 } else if !app.results.is_empty() {
                                     let (title, path) = &app.results[app.selected];
@@ -1021,6 +1144,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 && !app.input.trim().is_empty()
                                 && !app.searching
                             {
+                                if let Some(message) = handle_cast_command(&app.input, &mut player)
+                                {
+                                    app.error = Some(message);
+                                    app.input.clear();
+                                    needs_redraw = true;
+                                    continue;
+                                }
                                 app.searching = true;
                                 let query = app.input.trim().to_string();
                                 match search_youtube(&query) {

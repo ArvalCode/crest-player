@@ -20,6 +20,7 @@ ASCII music-video display when left idle.
 - Optionally prefetch YouTube Mix recommendations when the queue is empty.
 - Optionally publish the current track, playback state, and elapsed time through
   Discord Rich Presence.
+- Optionally send audio to AirPlay and Sonos speakers on the local network.
 - Persist settings in the platform configuration directory; on Linux this is
   normally `~/.config/crest-player/settings.json`.
 
@@ -167,6 +168,88 @@ Enter these in **Downloaded Music Only** mode:
 | `:shuffle queue` | Randomize the current playback queue |
 | `:shuffle all` | Add every downloaded library song to the queue, then randomize it |
 | `:clear` | Empty the playback queue without stopping the current song |
+
+### AirPlay and Sonos casting
+
+> **AirPlay compatibility is experimental and has not yet been tested with a
+> physical AirPlay speaker.** Sonos support and the common playback path do not
+> guarantee that every AirPlay receiver will work. Bug reports with the receiver
+> model and `atvremote` version are welcome.
+
+Casting's lightweight integration layer is enabled in normal builds. It can be
+excluded for a minimal build with:
+
+```bash
+cargo build --release --no-default-features
+```
+
+The integration delegates the network protocols to their established command-line
+clients. Install [pyatv](https://pyatv.dev/) for AirPlay and
+[SoCo-CLI](https://github.com/avantrec/soco-cli) for Sonos, for example in isolated
+Python environments:
+
+```bash
+pipx install pyatv
+pipx install soco-cli
+```
+
+When the Speakers page first scans, Crest Player checks for SoCo-CLI and installs it
+through an existing `pipx` automatically if needed. It performs the same check for
+pyatv/`atvremote` before scanning AirPlay and RAOP receivers. On Arch Linux it also attempts
+to install `python-pipx` when sudo authorization is already cached or passwordless.
+It never leaves an interactive password prompt running behind the terminal UI; if
+authorization is required, the page shows the one command that must be run manually.
+Dependency checks and discovery run only for an uncached scan or an explicit `R`
+rescan—there is no continuous discovery process.
+
+Both tools must be available on `PATH`. Open **Settings → Speakers**; Crest Player
+scans for both systems in the background and presents one combined device list.
+Select speakers with the arrow keys and toggle each one with Enter. Selected devices
+are marked with `●` and play as one speaker group; Sonos and AirPlay devices can be
+mixed. Playback and transport commands are dispatched independently so a slow or
+offline receiver does not block commands to the rest of the group. Results are
+cached for the session; press `R` to rescan or `D` to disconnect the whole group.
+
+The equivalent command-bar controls remain available for scripting or manual
+fallback:
+
+```text
+:cast airplay Living Room
+:cast sonos Kitchen
+:cast sonos 192.168.1.40
+:cast status
+:cast off
+```
+
+The selected output takes effect on the next track. Crest Player keeps a real-time
+FFmpeg null-output clock so queue progression, lyrics, and video synchronization
+continue without opening the local audio device. AirPlay names are resolved by
+`atvremote`; Sonos accepts a room name or IPv4
+address. Local Sonos files are served by SoCo-CLI only for the duration of playback.
+For online tracks, Crest Player uses FFmpeg to convert the active stream to MP3 in
+real time and exposes it through an ephemeral local relay restricted to the selected
+Sonos IP. This avoids sending Sonos YouTube CDN URLs and formats it may reject. The
+SoCo-CLI server may require inbound TCP ports 54000–54099 through the host firewall;
+the streaming relay uses a temporary operating-system-assigned TCP port, and Sonos
+discovery uses SSDP multicast on UDP port 1900.
+
+For streamed Sonos playback, the relay records when the speaker makes its first
+audio request. Crest Player holds playback time at zero until that event, then uses
+the same monotonic clock for synchronized lyrics, video frame presentation, seeking,
+and queue progression. Frames ahead of audio are held and obsolete frames are
+dropped, matching local playback's synchronization behavior.
+
+AirPlay playback sends downloaded files directly through `atvremote`. For online
+tracks, Crest Player converts the active audio to a 192 kbps MP3 stream with FFmpeg
+and pipes it to pyatv's RAOP sender; no temporary media file is created. The converter
+and sender are terminated and reaped on stop, output change, or application exit.
+Receivers requiring pairing or a password must be configured once with `atvremote`;
+its credentials are then reused from pyatv's per-user storage.
+
+Pause, resume, stop, and seeking are forwarded to the selected speaker. AirPlay
+devices that require pairing or a password must first be configured with
+`atvremote`. On quit, Crest Player waits for the receiver to acknowledge Stop,
+then terminates and reaps the temporary casting helper and local media server.
 
 `Esc` clears the command bar. The first input wakes the screensaver and is
 consumed; playback shortcuts continue to work in Ambient and Cinema.
@@ -380,13 +463,20 @@ sudo install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer.png \
 ## Windows (PowerShell)
 
 Install Microsoft C++ Build Tools with **Desktop development with C++**, then
-install Rust, Git, `yt-dlp`, and FFmpeg. With WinGet:
+install Rust, Git, `yt-dlp`, and FFmpeg. Python is optional and is needed only
+for AirPlay/Sonos casting. With WinGet:
 
 ```powershell
 winget install --id Rustlang.Rustup --exact
 winget install --id Git.Git --exact
 winget install yt-dlp
 winget install --id Gyan.FFmpeg --exact
+```
+
+For casting, also install Python:
+
+```powershell
+winget install --id Python.Python.3.13 --exact
 ```
 
 Restart PowerShell so the tools are on `PATH`, then build:
@@ -415,6 +505,64 @@ duplicate `PATH` entry. Linux is detected separately and continues to use the pe
 `~/.local` integration described above; unsupported operating systems return a
 clear error.
 
+### Windows AirPlay and Sonos setup
+
+Python is needed only for casting. In a regular, non-Administrator PowerShell
+window, install `pipx` and the isolated casting helpers:
+
+```powershell
+py -m pip install --user pipx
+py -m pipx ensurepath
+```
+
+Close and reopen PowerShell so its updated `PATH` is loaded, then run:
+
+```powershell
+pipx install soco-cli
+pipx install pyatv
+sonos-discover
+atvremote scan
+```
+
+`sonos-discover` should list each Sonos room. `atvremote scan` should list
+AirPlay/RAOP receivers; AirPlay support remains experimental and is not yet
+hardware-tested by the Crest Player project.
+
+Start Crest Player, open **Settings → Speakers**, and wait for the initial scan.
+Use the arrow keys and Enter to select a speaker, `R` to rescan, and `D` to
+disconnect. Selecting a speaker affects the next track. The helpers run only
+during discovery, control operations, or casting; Crest Player installs no
+Windows service or background startup task.
+
+If a helper is installed but not found, verify the newly opened PowerShell sees
+it before starting Crest Player:
+
+```powershell
+Get-Command sonos
+Get-Command sonos-discover
+Get-Command atvremote
+```
+
+Keep the computer and speaker on the same LAN and mark trusted home Wi-Fi as a
+**Private** network in Windows Settings. Windows Defender Firewall may ask
+whether Python can communicate on the network; allow **Private networks** only.
+SoCo-CLI uses SSDP discovery on UDP 1900 and temporarily serves downloaded tracks
+on TCP 54000–54099. Online playback uses a temporary dynamic TCP port selected by
+Windows for Crest Player's MP3 relay. Do not expose casting ports on a Public
+profile or forward them through the router. If playback fails after discovery succeeds,
+check **Windows Security → Firewall & network protection → Allow an app through
+firewall** and permit both Crest Player and the `soco-cli` Python environment on
+Private networks.
+
+On quit, Crest Player stops the receiver and closes the temporary HTTP server.
+You can verify that no casting listener remains:
+
+```powershell
+Get-NetTCPConnection -LocalPort (54000..54099) -State Listen -ErrorAction SilentlyContinue
+```
+
+No output means the temporary Sonos server is closed.
+
 ### Playback troubleshooting
 
 - If Crest Player reports that it cannot start `ffplay`, verify that `ffplay` is
@@ -429,6 +577,12 @@ clear error.
   disable hardware decoding if the local FFmpeg build does not support it.
 - Downloaded songs work offline, but lyrics or video may be unavailable unless
   their data was embedded in the matching `.crestvid` cache.
+- If Sonos appears but remains silent, run `sonos-discover`, verify the speaker
+  is reachable, allow the helper on Private networks, select the speaker again,
+  and start the next track.
+- If speaker discovery returns nothing, confirm the Wi-Fi profile is Private,
+  client/AP isolation is disabled on the router, and the computer and speaker
+  are on the same subnet. Guest Wi-Fi commonly blocks local-device discovery.
 
 ### Windows data locations
 
@@ -438,9 +592,11 @@ clear error.
 
 ### Current Windows limitation
 
-Native Windows supports playback, search, downloads, video, seeking, and skipping.
+Native Windows supports playback, search, downloads, video, seeking, skipping,
+and optional Sonos/AirPlay discovery and casting.
 `Ctrl+P` pause/resume relies on Unix signals and does not currently suspend
-`ffplay` natively; WSL uses the Linux behavior.
+local `ffplay` natively; network-speaker pause/resume is forwarded through its
+casting protocol. WSL uses the Linux behavior.
 
 ## Uninstalling
 
@@ -449,6 +605,14 @@ For a complete interactive uninstall, run:
 ```sh
 crest-player --remove
 ```
+
+The command detects Linux, macOS, and Windows separately before removing any
+application files. Linux package installs use `pacman`, Linux manual installs
+remove only their recognized system or per-user paths, macOS recognizes
+`/usr/local/bin`, `/opt/homebrew/bin`, and the per-user `~/.local/bin` install,
+and Windows removes its per-user executable, shortcuts, and `PATH` entry using
+Windows-specific handling. Unrecognized application copies are refused rather
+than applying another operating system's removal rules.
 
 The command offers three choices: remove only the application while keeping
 music and settings, remove only indexed music/video while keeping the application
