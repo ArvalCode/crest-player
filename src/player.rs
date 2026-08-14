@@ -471,10 +471,20 @@ impl Player {
         self.caster.targets()
     }
 
+    #[cfg(feature = "casting")]
+    pub fn cast_volume(&self) -> u8 {
+        self.caster.volume()
+    }
+
+    #[cfg(feature = "casting")]
+    pub fn adjust_cast_volume(&mut self, change: i8) -> String {
+        self.caster.adjust_volume(change)
+    }
+
     fn casting_active(&self) -> bool {
         #[cfg(feature = "casting")]
         {
-            self.caster.is_active()
+            self.caster.needs_network_clock()
         }
         #[cfg(not(feature = "casting"))]
         {

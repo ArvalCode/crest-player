@@ -523,7 +523,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         speaker_discovery.is_some(),
                         &player.cast_status(),
                         speaker_notice.as_deref(),
-                        player.cast_targets(),
+                        (player.cast_targets(), player.cast_volume()),
                     );
                     return;
                 }
@@ -577,6 +577,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(device) = discovered_speakers.get(speaker_selected) {
                                 app.error = Some(player.set_cast_target(device.target.clone()));
                             }
+                        }
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            app.error = Some(player.adjust_cast_volume(5));
+                        }
+                        KeyCode::Char('-') | KeyCode::Char('_') => {
+                            app.error = Some(player.adjust_cast_volume(-5));
                         }
                         KeyCode::Char('r') | KeyCode::Char('R') => {
                             discovered_speakers.clear();

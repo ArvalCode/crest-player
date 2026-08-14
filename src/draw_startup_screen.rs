@@ -172,7 +172,7 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
             ),
             (
                 "Speakers...",
-                "Automatically find and connect to AirPlay or Sonos speakers on this Wi-Fi network.",
+                "Find AirPlay, Sonos, and Bluetooth speakers, ordered by connection type.",
             ),
             (
                 "Delete All Known Songs/Videos",

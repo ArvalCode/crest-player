@@ -169,7 +169,7 @@ Enter these in **Downloaded Music Only** mode:
 | `:shuffle all` | Add every downloaded library song to the queue, then randomize it |
 | `:clear` | Empty the playback queue without stopping the current song |
 
-### AirPlay and Sonos casting
+### AirPlay, Sonos, and Bluetooth speakers
 
 > **AirPlay compatibility is experimental and has not yet been tested with a
 > physical AirPlay speaker.** Sonos support and the common playback path do not
@@ -203,12 +203,19 @@ Dependency checks and discovery run only for an uncached scan or an explicit `R`
 rescan—there is no continuous discovery process.
 
 Both tools must be available on `PATH`. Open **Settings → Speakers**; Crest Player
-scans for both systems in the background and presents one combined device list.
+scans in the background and presents one combined device list ordered as AirPlay,
+Sonos, then Bluetooth. On Linux, Bluetooth speaker discovery uses BlueZ's
+`bluetoothctl`, scans only while the Speakers page requests discovery, and filters
+results to audio-sink devices rather than listing keyboards and other peripherals.
 Select speakers with the arrow keys and toggle each one with Enter. Selected devices
 are marked with `●` and play as one speaker group; Sonos and AirPlay devices can be
 mixed. Playback and transport commands are dispatched independently so a slow or
 offline receiver does not block commands to the rest of the group. Results are
 cached for the session; press `R` to rescan or `D` to disconnect the whole group.
+Use `+` and `-` to adjust one shared group volume in five-percent steps. Crest Player
+sends the level concurrently through AirPlay and Sonos protocol controls; Bluetooth
+uses the operating system's current audio-sink volume (`wpctl`/`pactl` on Linux,
+system output volume on macOS, and Windows multimedia volume controls).
 
 The equivalent command-bar controls remain available for scripting or manual
 fallback:
@@ -456,8 +463,10 @@ For a manual, system-wide installation, copy the launcher and desktop entry too:
 ```sh
 sudo cp packaging/linux/crest-player-launch /usr/local/bin/
 sudo cp packaging/linux/io.github.ArvalCode.CrestPlayer.desktop /usr/share/applications/
-sudo install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer.png \
-  /usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png
+sudo install -Dm0644 packaging/linux/icons/io.github.ArvalCode.CrestPlayer-512.png \
+  /usr/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png
+sudo update-desktop-database /usr/share/applications
+sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor
 ```
 
 ## Windows (PowerShell)
@@ -695,7 +704,7 @@ launcher, desktop entry, and icon:
 sudo rm /usr/local/bin/crest-player
 sudo rm /usr/local/bin/crest-player-launch
 sudo rm /usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop
-sudo rm /usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png
+sudo rm /usr/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png
 ```
 
 Older installations may have only `/usr/local/bin/crest-player`; a "No such

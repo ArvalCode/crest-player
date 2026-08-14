@@ -299,9 +299,11 @@ pub fn start_discovery() -> DiscoveryHandle {
         }
         let (sonos, sonos_notice) = discover_sonos(&worker_cancelled);
         devices.extend(sonos);
-        devices.sort_by_key(|device| device.name.to_lowercase());
+        let (bluetooth, bluetooth_notice) = discover_bluetooth(&worker_cancelled);
+        devices.extend(bluetooth);
+        devices.sort_by_key(|device| (device.target.protocol_order(), device.name.to_lowercase()));
         devices.dedup_by(|left, right| left.target == right.target);
-        let notice = [airplay_notice, sonos_notice]
+        let notice = [airplay_notice, sonos_notice, bluetooth_notice]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
@@ -315,6 +317,83 @@ pub fn start_discovery() -> DiscoveryHandle {
         receiver,
         cancelled,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn discover_bluetooth(cancelled: &AtomicBool) -> (Vec<CastDevice>, Option<String>) {
+    if !command_works("bluetoothctl", &["--version"]) {
+        return (
+            Vec::new(),
+            Some("Bluetooth search needs bluetoothctl (BlueZ).".to_string()),
+        );
+    }
+    let mut scan = external_command("bluetoothctl");
+    scan.args(["--timeout", "4", "scan", "on"]);
+    let _ = bounded_output(scan, DISCOVERY_OUTPUT_LIMIT);
+    if cancelled.load(Ordering::Acquire) {
+        return (Vec::new(), None);
+    }
+    let mut command = external_command("bluetoothctl");
+    command.arg("devices");
+    let Ok(output) = bounded_output(command, DISCOVERY_OUTPUT_LIMIT) else {
+        return (
+            Vec::new(),
+            Some("Bluetooth device search failed.".to_string()),
+        );
+    };
+    let candidates = parse_bluetooth_devices(&String::from_utf8_lossy(&output.stdout));
+    let devices = candidates
+        .into_iter()
+        .filter(|device| {
+            if cancelled.load(Ordering::Acquire) {
+                return false;
+            }
+            let CastTarget::Bluetooth(address) = &device.target else {
+                return false;
+            };
+            let mut info = external_command("bluetoothctl");
+            info.args(["info", address]);
+            bounded_output(info, 32 * 1024).is_ok_and(|output| {
+                let output = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                output.contains("audio sink")
+                    || output.contains("audio-card")
+                    || output.contains("0000110b-0000-1000-8000-00805f9b34fb")
+            })
+        })
+        .collect();
+    (devices, None)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn discover_bluetooth(_cancelled: &AtomicBool) -> (Vec<CastDevice>, Option<String>) {
+    (
+        Vec::new(),
+        Some("Bluetooth speaker search currently requires Linux BlueZ.".to_string()),
+    )
+}
+
+fn parse_bluetooth_devices(output: &str) -> Vec<CastDevice> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut columns = line.trim().splitn(3, ' ');
+            (columns.next()? == "Device").then_some(())?;
+            let address = columns.next()?.trim();
+            let name = sanitize_display_text_limited(columns.next()?.trim(), 128);
+            let valid_address = address.len() == 17
+                && address.bytes().enumerate().all(|(index, byte)| {
+                    if index % 3 == 2 {
+                        byte == b':'
+                    } else {
+                        byte.is_ascii_hexdigit()
+                    }
+                });
+            (valid_address && valid_device_name(&name)).then(|| CastDevice {
+                name: format!("{name}  ·  Bluetooth"),
+                target: CastTarget::Bluetooth(address.to_string()),
+            })
+        })
+        .collect()
 }
 
 fn discover_airplay() -> (Vec<CastDevice>, Option<String>) {
@@ -501,8 +580,9 @@ pub fn draw_speakers_page(
     scanning: bool,
     current: &str,
     notice: Option<&str>,
-    active: &[CastTarget],
+    group: (&[CastTarget], u8),
 ) {
+    let (active, volume) = group;
     let area = frame.area();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -554,7 +634,7 @@ pub fn draw_speakers_page(
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{current}  ·  ↑/↓ select · Enter toggle · R rescan · D disconnect all · Esc back"
+            "{current}  ·  Volume {volume}% · +/- adjust · ↑/↓ select · Enter toggle · R rescan · D disconnect all · Esc back"
         )),
         chunks[2],
     );
@@ -564,6 +644,7 @@ pub fn draw_speakers_page(
 pub enum CastTarget {
     AirPlay(String),
     Sonos(String),
+    Bluetooth(String),
 }
 
 impl CastTarget {
@@ -571,6 +652,15 @@ impl CastTarget {
         match self {
             Self::AirPlay(device) => format!("AirPlay: {device}"),
             Self::Sonos(device) => format!("Sonos: {device}"),
+            Self::Bluetooth(device) => format!("Bluetooth: {device}"),
+        }
+    }
+
+    fn protocol_order(&self) -> u8 {
+        match self {
+            Self::AirPlay(_) => 0,
+            Self::Sonos(_) => 1,
+            Self::Bluetooth(_) => 2,
         }
     }
 }
@@ -618,6 +708,7 @@ pub fn help() -> String {
 pub struct Caster {
     targets: Vec<CastTarget>,
     sessions: Vec<CastSession>,
+    volume: u8,
 }
 
 struct CastSession {
@@ -631,11 +722,20 @@ impl Caster {
         Self {
             targets: Vec::new(),
             sessions: Vec::new(),
+            volume: 50,
         }
     }
 
-    pub fn is_active(&self) -> bool {
-        !self.targets.is_empty()
+    pub fn needs_network_clock(&self) -> bool {
+        let has_network = self
+            .targets
+            .iter()
+            .any(|target| !matches!(target, CastTarget::Bluetooth(_)));
+        let has_bluetooth = self
+            .targets
+            .iter()
+            .any(|target| matches!(target, CastTarget::Bluetooth(_)));
+        has_network && !has_bluetooth
     }
 
     pub fn status(&self) -> String {
@@ -671,6 +771,7 @@ impl Caster {
         } else {
             self.stop();
             self.targets.push(target);
+            self.apply_volume();
             format!(
                 "Added {label}. The next track will use {} speaker(s).",
                 self.targets.len()
@@ -680,6 +781,24 @@ impl Caster {
 
     pub fn targets(&self) -> &[CastTarget] {
         &self.targets
+    }
+
+    pub fn volume(&self) -> u8 {
+        self.volume
+    }
+
+    pub fn adjust_volume(&mut self, change: i8) -> String {
+        self.volume = if change.is_negative() {
+            self.volume.saturating_sub(change.unsigned_abs())
+        } else {
+            self.volume.saturating_add(change as u8).min(100)
+        };
+        self.apply_volume();
+        format!("Speaker group volume: {}%.", self.volume)
+    }
+
+    fn apply_volume(&self) {
+        spawn_controls(volume_commands(&self.targets, self.volume), false);
     }
 
     pub fn off(&mut self) -> String {
@@ -701,6 +820,7 @@ impl Caster {
                 Err(error) => errors.push(error),
             }
         }
+        self.apply_volume();
         if self.sessions.is_empty() && !errors.is_empty() {
             Err(errors.join(" "))
         } else {
@@ -833,6 +953,11 @@ impl CastSession {
                 }
                 command
             }
+            CastTarget::Bluetooth(address) => {
+                let mut command = external_command("bluetoothctl");
+                command.args(["connect", &address]);
+                command
+            }
         };
         session.child = command
             .stdin(Stdio::null())
@@ -891,7 +1016,86 @@ fn control_command(
             }
             command
         }
+        CastTarget::Bluetooth(address) => {
+            let mut command = external_command("bluetoothctl");
+            if action == "stop" {
+                command.args(["disconnect", address]);
+            } else {
+                command.args(["connect", address]);
+            }
+            command
+        }
     }
+}
+
+fn volume_commands(targets: &[CastTarget], volume: u8) -> Vec<std::process::Command> {
+    let mut commands = Vec::new();
+    let mut local_volume_added = false;
+    for target in targets {
+        match target {
+            CastTarget::AirPlay(device) => {
+                let mut command = airplay_command();
+                select_airplay_device(&mut command, device);
+                command.arg(format!("set_volume={volume}"));
+                commands.push(command);
+            }
+            CastTarget::Sonos(device) => {
+                let mut command = external_command("sonos");
+                command.args(["-l", device, "volume", &volume.to_string()]);
+                commands.push(command);
+            }
+            CastTarget::Bluetooth(_) if !local_volume_added => {
+                if let Some(command) = local_volume_command(volume) {
+                    commands.push(command);
+                }
+                local_volume_added = true;
+            }
+            CastTarget::Bluetooth(_) => {}
+        }
+    }
+    commands
+}
+
+#[cfg(target_os = "linux")]
+fn local_volume_command(volume: u8) -> Option<std::process::Command> {
+    if external_command_path("wpctl").is_some() {
+        let mut command = external_command("wpctl");
+        command.args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{volume}%")]);
+        Some(command)
+    } else if external_command_path("pactl").is_some() {
+        let mut command = external_command("pactl");
+        command.args(["set-sink-volume", "@DEFAULT_SINK@", &format!("{volume}%")]);
+        Some(command)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn local_volume_command(volume: u8) -> Option<std::process::Command> {
+    let mut command = external_command("osascript");
+    command.args(["-e", &format!("set volume output volume {volume}")]);
+    Some(command)
+}
+
+#[cfg(windows)]
+fn local_volume_command(volume: u8) -> Option<std::process::Command> {
+    let mut command = external_command("powershell");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &format!(
+            "$shell=New-Object -ComObject WScript.Shell; 1..50 | % {{$shell.SendKeys([char]174)}}; 1..{} | % {{$shell.SendKeys([char]175)}}",
+            volume.div_ceil(2)
+        ),
+    ]);
+    Some(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn local_volume_command(_volume: u8) -> Option<std::process::Command> {
+    None
 }
 
 fn spawn_controls(commands: Vec<std::process::Command>, wait: bool) {
@@ -935,7 +1139,7 @@ impl Drop for Caster {
 
 #[cfg(test)]
 mod tests {
-    use super::{CastCommand, CastTarget};
+    use super::{CastCommand, CastTarget, Caster};
 
     #[test]
     fn parses_device_names_with_spaces() {
@@ -1004,5 +1208,40 @@ mod tests {
             CastTarget::Sonos("192.168.1.40".to_string()).label(),
             "Sonos: 192.168.1.40"
         );
+    }
+
+    #[test]
+    fn parses_only_well_formed_bluetooth_device_rows() {
+        let devices = super::parse_bluetooth_devices(
+            "Device AA:BB:CC:DD:EE:FF Living Room Speaker\nDevice invalid Keyboard\n",
+        );
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "Living Room Speaker  ·  Bluetooth");
+        assert_eq!(
+            devices[0].target,
+            CastTarget::Bluetooth("AA:BB:CC:DD:EE:FF".into())
+        );
+    }
+
+    #[test]
+    fn speaker_protocol_order_is_airplay_sonos_bluetooth() {
+        assert!(
+            CastTarget::AirPlay("a".into()).protocol_order()
+                < CastTarget::Sonos("s".into()).protocol_order()
+        );
+        assert!(
+            CastTarget::Sonos("s".into()).protocol_order()
+                < CastTarget::Bluetooth("b".into()).protocol_order()
+        );
+    }
+
+    #[test]
+    fn group_volume_is_clamped_to_a_safe_percentage_range() {
+        let mut caster = Caster::new();
+        assert_eq!(caster.volume(), 50);
+        caster.adjust_volume(100);
+        assert_eq!(caster.volume(), 100);
+        caster.adjust_volume(-100);
+        assert_eq!(caster.volume(), 0);
     }
 }

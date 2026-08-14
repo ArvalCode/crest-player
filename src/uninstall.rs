@@ -437,7 +437,7 @@ impl Installation {
                     OsStr::new("/usr/local/bin/crest-player-launch"),
                     OsStr::new("/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop"),
                     OsStr::new(
-                        "/usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png",
+                        "/usr/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png",
                     ),
                 ]),
                 Self::ManualUser(home) => {
@@ -448,7 +448,7 @@ impl Installation {
                             ".local/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
                         ),
                         home.join(
-                            ".local/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png",
+                            ".local/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png",
                         ),
                     ];
                     for path in paths {
@@ -490,7 +490,7 @@ impl Installation {
                         "/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
                     ),
                     PathBuf::from(
-                        "/usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png",
+                        "/usr/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png",
                     ),
                     PathBuf::from("/usr/share/licenses/crest-player/LICENSE"),
                     PathBuf::from("/usr/share/doc/crest-player/README.md"),
@@ -502,7 +502,7 @@ impl Installation {
                         "/usr/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
                     ),
                     PathBuf::from(
-                        "/usr/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png",
+                        "/usr/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png",
                     ),
                 ],
                 Self::ManualUser(home) => vec![
@@ -512,7 +512,7 @@ impl Installation {
                         ".local/share/applications/io.github.ArvalCode.CrestPlayer.desktop",
                     ),
                     home.join(
-                        ".local/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png",
+                        ".local/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png",
                     ),
                 ],
             }

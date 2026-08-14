@@ -9,7 +9,8 @@ const PATH_BLOCK_START: &str = "# >>> crest-player command >>>";
 const PATH_BLOCK_END: &str = "# <<< crest-player command <<<";
 
 #[cfg(target_os = "linux")]
-const ICON: &[u8] = include_bytes!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer.png");
+const ICON: &[u8] =
+    include_bytes!("../packaging/linux/icons/io.github.ArvalCode.CrestPlayer-512.png");
 
 #[cfg(target_os = "linux")]
 pub fn install() -> Result<(), String> {
@@ -49,6 +50,9 @@ pub fn install() -> Result<(), String> {
         .map_err(|error| format!("could not write {}: {error}", desktop.display()))?;
     std::fs::write(&icon, ICON)
         .map_err(|error| format!("could not write {}: {error}", icon.display()))?;
+    remove_file_if_present_linux(
+        &home.join(".local/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png"),
+    )?;
     let legacy_icon =
         home.join(".local/share/icons/hicolor/scalable/apps/io.github.ArvalCode.CrestPlayer.svg");
     match std::fs::remove_file(legacy_icon) {
@@ -56,6 +60,7 @@ pub fn install() -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(format!("could not remove legacy icon: {error}")),
     }
+    refresh_linux_desktop_caches(&home);
 
     println!("Crest Player desktop integration installed.");
     println!("Executable:    {}", installed_executable.display());
@@ -76,7 +81,11 @@ pub fn remove() -> Result<(), String> {
             Err(error) => return Err(format!("could not remove {}: {error}", path.display())),
         }
     }
+    remove_file_if_present_linux(
+        &home.join(".local/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png"),
+    )?;
     remove_command_path_settings(&home)?;
+    refresh_linux_desktop_caches(&home);
     Ok(())
 }
 
@@ -315,8 +324,34 @@ fn user_integration_paths(home: &Path) -> [std::path::PathBuf; 4] {
         home.join(".local/bin/crest-player"),
         home.join(".local/bin/crest-player-launch"),
         home.join(".local/share/applications/io.github.ArvalCode.CrestPlayer.desktop"),
-        home.join(".local/share/icons/hicolor/1024x1024/apps/io.github.ArvalCode.CrestPlayer.png"),
+        home.join(".local/share/icons/hicolor/512x512/apps/io.github.ArvalCode.CrestPlayer.png"),
     ]
+}
+
+#[cfg(target_os = "linux")]
+fn remove_file_if_present_linux(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not remove {}: {error}", path.display())),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_linux_desktop_caches(home: &Path) {
+    let applications = home.join(".local/share/applications");
+    let icons = home.join(".local/share/icons/hicolor");
+    if crate::security::external_command_path("update-desktop-database").is_some() {
+        let _ = crate::security::external_command("update-desktop-database")
+            .arg(applications)
+            .status();
+    }
+    if crate::security::external_command_path("gtk-update-icon-cache").is_some() {
+        let _ = crate::security::external_command("gtk-update-icon-cache")
+            .args(["-f", "-t"])
+            .arg(icons)
+            .status();
+    }
 }
 
 #[cfg(target_os = "linux")]
