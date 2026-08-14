@@ -11,6 +11,7 @@ use std::path::PathBuf;
 pub fn search_youtube(query: &str) -> Result<Vec<(String, String)>, String> {
     let mut command = external_command("yt-dlp");
     command.args([
+        "--ignore-config".to_string(),
         "--socket-timeout".to_string(),
         "10".to_string(),
         "--retries".to_string(),
@@ -58,10 +59,13 @@ pub fn download_audio(
     let mut command = external_command("yt-dlp");
     let status = command
         .args([
+            "--ignore-config",
             "--socket-timeout",
             "10",
             "--retries",
             "2",
+            "--fragment-retries",
+            "5",
             "--force-overwrites",
             "--no-playlist",
             "-f",
@@ -80,11 +84,10 @@ pub fn download_audio(
         .status()
         .map_err(|error| format!("could not start yt-dlp: {error}"))?;
     if status.success() {
-        let valid_output = path
-            .metadata()
-            .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+        let valid_output = playable_audio_file(path);
         if !valid_output {
-            return Err("yt-dlp exited successfully but did not create an MP3".to_string());
+            let _ = std::fs::remove_file(path);
+            return Err("yt-dlp did not create a complete playable MP3".to_string());
         }
         if let Some((width, height, fps)) = video_cache_plan {
             let video_path = path.with_extension("video.cache");
@@ -97,10 +100,13 @@ pub fn download_audio(
                 .ok_or_else(|| "the video cache path is not valid UTF-8".to_string())?;
             let video_status = external_command("yt-dlp")
                 .args([
+                    "--ignore-config",
                     "--socket-timeout",
                     "10",
                     "--retries",
                     "2",
+                    "--fragment-retries",
+                    "5",
                     "--force-overwrites",
                     "--no-playlist",
                     "-f",
@@ -142,4 +148,33 @@ pub fn download_audio(
         let _ = std::fs::remove_file(path);
         Err(format!("yt-dlp exited with {status}"))
     }
+}
+
+pub fn playable_audio_file(path: &std::path::Path) -> bool {
+    if !path
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+    {
+        return false;
+    }
+    let Some(path) = path.to_str() else {
+        return false;
+    };
+    let mut command = external_command("ffprobe");
+    command.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]);
+    bounded_output(command, 1024).is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|duration| duration.is_finite() && duration > 0.0)
+    })
 }

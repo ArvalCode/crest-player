@@ -47,7 +47,7 @@ use player::Player;
 use ratatui::Terminal;
 use ratatui::prelude::CrosstermBackend;
 use recommendations::{Recommendation, youtube_mix_recommendation};
-use search::{download_audio, search_youtube};
+use search::{download_audio, playable_audio_file, search_youtube};
 use security::{contained_media_path, external_command, valid_youtube_id};
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -290,32 +290,36 @@ fn queue_youtube_download(
     let title = title.to_string();
     let download_path = queue_path.clone();
     std::thread::spawn(move || {
-        let _ = std::fs::remove_file(&download_path);
-        let mut command = external_command("yt-dlp");
-        command.args([
-            "--socket-timeout",
-            "10",
-            "--retries",
-            "2",
-            "--no-playlist",
-            "-f",
-            "bestaudio/best",
-            "-x",
-            "--audio-format",
-            "mp3",
-            "--force-overwrites",
-            "-o",
-            &download_path,
-            &url,
-        ]);
-        let status = command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        let success = status.is_ok_and(|status| status.success())
-            && std::fs::metadata(&download_path)
-                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+        let success = (0..3).any(|_| {
+            let _ = std::fs::remove_file(&download_path);
+            let mut command = external_command("yt-dlp");
+            command.args([
+                "--ignore-config",
+                "--socket-timeout",
+                "10",
+                "--retries",
+                "2",
+                "--fragment-retries",
+                "5",
+                "--no-playlist",
+                "-f",
+                "bestaudio/best",
+                "-x",
+                "--audio-format",
+                "mp3",
+                "--force-overwrites",
+                "-o",
+                &download_path,
+                &url,
+            ]);
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+                && playable_audio_file(std::path::Path::new(&download_path))
+        });
         if !success {
             let _ = std::fs::remove_file(&download_path);
         }
