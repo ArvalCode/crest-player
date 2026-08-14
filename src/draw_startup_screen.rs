@@ -5,7 +5,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-pub const HOME_OPTION_COUNT: usize = 3;
+pub const HOME_OPTION_COUNT: usize = 4;
 pub const SETTINGS_OPTION_COUNT: usize = 14;
 pub const DELETE_MEDIA_SETTING: usize = SETTINGS_OPTION_COUNT - 3;
 pub const RESET_WALLPAPER_SETTING: usize = SETTINGS_OPTION_COUNT - 2;
@@ -22,6 +22,7 @@ pub struct StartupScreenState<'a> {
     pub library_track_count: usize,
     pub home_wallpaper: Option<&'a HomeWallpaper>,
     pub playback: (Option<&'a str>, &'a str),
+    pub party_notice: Option<&'a str>,
 }
 
 pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>) {
@@ -35,6 +36,7 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
         library_track_count,
         home_wallpaper,
         playback,
+        party_notice,
     } = state;
     let (settings_page, selected) = page;
     let (lyrics_enabled, live_sync_enabled, pronunciations_enabled) = lyric_settings;
@@ -210,6 +212,10 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
                 "Play only your downloaded music library.",
             ),
             (
+                "Party Mode",
+                "Instantly host a private music queue for phones on this Wi-Fi network.",
+            ),
+            (
                 "Settings",
                 "Configure lyrics, pronunciations, video, FPS, and autoplay.",
             ),
@@ -250,6 +256,9 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
         ),
         None => navigation_hint.to_string(),
     };
+    let hint_text = party_notice
+        .map(|notice| format!("{notice}  ·  {hint_text}"))
+        .unwrap_or(hint_text);
 
     if !settings_page && let Some(wallpaper) = home_wallpaper {
         draw_wallpaper_home(f, wallpaper, option_lines, hint_text);
@@ -272,7 +281,7 @@ pub fn draw_startup_screen(f: &mut ratatui::Frame, state: StartupScreenState<'_>
                 Constraint::Length(0),
                 Constraint::Length(0),
                 Constraint::Min(option_lines.len() as u16),
-                Constraint::Length(1),
+                Constraint::Length(if party_notice.is_some() { 2 } else { 1 }),
             ])
             .split(f.area())
     } else {

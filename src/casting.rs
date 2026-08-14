@@ -22,7 +22,6 @@ const DISCOVERY_OUTPUT_LIMIT: usize = 256 * 1024;
 const RELAY_REQUEST_LIMIT: usize = 8 * 1024;
 const PYATV_BOOTSTRAP: &str = "import asyncio,sys; asyncio.set_event_loop(asyncio.new_event_loop()); from pyatv.scripts.atvremote import main; sys.exit(main())";
 const PYATV_IMPORT_CHECK: &str = "import pyatv";
-
 fn airplay_command() -> std::process::Command {
     let Some(launcher) = airplay_launcher_path() else {
         return external_command("atvremote");

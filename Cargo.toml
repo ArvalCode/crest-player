@@ -23,6 +23,7 @@ dirs = "5.0"
 fastrand = "2.3"
 zstd = "0.12"
 discord-rich-presence = "0.2.5"
+getrandom = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

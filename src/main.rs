@@ -8,6 +8,7 @@ mod download_queue_ui;
 mod draw_startup_screen;
 mod idle_mode;
 mod lyrics;
+mod party_server;
 mod player;
 mod recommendations;
 mod search;
@@ -178,6 +179,87 @@ struct LibraryDownloadFinished {
     error: Option<String>,
 }
 
+struct LibraryDownloadRequest {
+    title: String,
+    url: String,
+    path: String,
+    video_cache_plan: Option<(u16, u16, u16)>,
+}
+
+fn start_library_download_worker(
+    receiver: std::sync::mpsc::Receiver<LibraryDownloadRequest>,
+    sender: std::sync::mpsc::Sender<LibraryDownloadFinished>,
+) {
+    // Keep multiple queued songs moving without starting an unbounded number of
+    // yt-dlp/FFmpeg processes. Each worker still owns one complete MP3/cache
+    // pair, and the shared receiver hands every request to exactly one worker.
+    const WORKER_COUNT: usize = 2;
+    let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+    for _ in 0..WORKER_COUNT {
+        let receiver = std::sync::Arc::clone(&receiver);
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            loop {
+                let request = {
+                    let Ok(receiver) = receiver.lock() else {
+                        return;
+                    };
+                    let Ok(request) = receiver.recv() else {
+                        return;
+                    };
+                    request
+                };
+                let downloaded = retry_library_download(&request, 3);
+                let (path, error) = match downloaded {
+                    Ok(path) => (path.to_string_lossy().into_owned(), None),
+                    Err(error) => (request.path, Some(error)),
+                };
+                if sender
+                    .send(LibraryDownloadFinished {
+                        title: request.title,
+                        path,
+                        error,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+}
+
+fn retry_library_download(
+    request: &LibraryDownloadRequest,
+    max_attempts: usize,
+) -> Result<std::path::PathBuf, String> {
+    let mut errors = Vec::new();
+    for attempt in 1..=max_attempts.max(1) {
+        let result = std::panic::catch_unwind(|| {
+            download_audio(
+                &request.url,
+                &request.title,
+                std::path::Path::new(&request.path),
+                request.video_cache_plan,
+            )
+        })
+        .unwrap_or_else(|_| Err("the download process stopped unexpectedly".to_string()));
+        match result {
+            Ok(path) => return Ok(path),
+            Err(error) => errors.push(format!("attempt {attempt}: {error}")),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+fn next_stream_queue_path() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("crest-stream-pending:{}:{id}", std::process::id())
+}
+
 fn queue_youtube_download(
     app: &mut App,
     player: &mut Player,
@@ -190,13 +272,7 @@ fn queue_youtube_download(
         return;
     }
     let url = format!("https://www.youtube.com/watch?v={video_id}");
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let queue_path = format!("crest-stream-pending:{unique}");
+    let queue_path = next_stream_queue_path();
     let autoplay = player.child.is_none()
         && !player
             .queue
@@ -308,11 +384,16 @@ fn process_download_completions(
 
 fn queue_library_download(
     app: &mut App,
-    sender: &std::sync::mpsc::Sender<LibraryDownloadFinished>,
-    url: String,
+    sender: &std::sync::mpsc::Sender<LibraryDownloadRequest>,
+    video_id: String,
     title: String,
     video_cache_plan: Option<(u16, u16, u16)>,
 ) {
+    if !valid_youtube_id(&video_id) {
+        app.error = Some("YouTube returned an invalid media identifier.".to_string());
+        return;
+    }
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
     let Some(directory) = dirs::audio_dir() else {
         app.error = Some("The Music directory is unavailable.".to_string());
         return;
@@ -321,13 +402,19 @@ fn queue_library_download(
         app.error = Some(format!("Could not create the Music directory: {error}"));
         return;
     }
-    let Ok(path) = contained_media_path(&directory, &title, "_ytmusic.mp3") else {
+    // YouTube IDs make output paths stable and prevent two different tracks
+    // with the same title (or titles that sanitize identically) from colliding.
+    let Ok(path) = library_download_path(&directory, &title, &video_id) else {
         app.error =
             Some("The download title could not be converted to a safe filename.".to_string());
         return;
     };
     let path_string = path.to_string_lossy().into_owned();
-    if app.is_library_file_available(&path_string) {
+    let cache_path = path.with_extension("crestvid");
+    let cache_is_available = cache_path
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+    if app.is_library_file_available(&path_string) && cache_is_available {
         app.error = Some(format!("{title} is already downloaded."));
         return;
     }
@@ -336,24 +423,36 @@ fn queue_library_download(
         return;
     }
     app.start_download(path_string.clone(), title.clone());
-    app.error = Some(format!("Downloading {title}…"));
-    let sender = sender.clone();
-    std::thread::spawn(move || {
-        let downloaded = download_audio(&url, &title, video_cache_plan);
-        let (path, error) = match downloaded {
-            Ok(path) => (path.to_string_lossy().into_owned(), None),
-            Err(error) => (path_string, Some(error)),
-        };
-        let _ = sender.send(LibraryDownloadFinished { title, path, error });
-    });
+    app.error = Some(format!("Queued {title} for download."));
+    if sender
+        .send(LibraryDownloadRequest {
+            title,
+            url,
+            path: path_string.clone(),
+            video_cache_plan,
+        })
+        .is_err()
+    {
+        app.finish_download(&path_string);
+        app.error = Some("The download worker is unavailable.".to_string());
+    }
+}
+
+fn library_download_path(
+    directory: &std::path::Path,
+    title: &str,
+    video_id: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let filename_suffix = format!(" [{video_id}]_ytmusic.mp3");
+    contained_media_path(directory, title, &filename_suffix)
 }
 
 fn video_cache_plan(app: &App, width: u16, height: u16) -> Option<(u16, u16, u16)> {
-    app.idle_video_enabled.then(|| {
+    Some({
         let samples = app.idle_video_render_mode.samples_per_cell();
         (
-            width.saturating_mul(samples.0),
-            height.saturating_mul(samples.1),
+            even_cache_dimension(width.saturating_mul(samples.0)),
+            even_cache_dimension(height.saturating_mul(samples.1)),
             if app.idle_video_fps == 0 {
                 30
             } else {
@@ -361,6 +460,10 @@ fn video_cache_plan(app: &App, width: u16, height: u16) -> Option<(u16, u16, u16
             },
         )
     })
+}
+
+fn even_cache_dimension(value: u16) -> u16 {
+    value.clamp(2, 4096) & !1
 }
 
 fn process_library_download_completions(
@@ -463,10 +566,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_rendered_video_second = 0u64;
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadFinished>();
-    let (library_download_tx, library_download_rx) =
+    let (library_download_finished_tx, library_download_rx) =
         std::sync::mpsc::channel::<LibraryDownloadFinished>();
+    let (library_download_tx, library_download_request_rx) =
+        std::sync::mpsc::channel::<LibraryDownloadRequest>();
+    start_library_download_worker(library_download_request_rx, library_download_finished_tx);
     let (recommendation_tx, recommendation_rx) =
         std::sync::mpsc::channel::<(String, Result<Recommendation, String>)>();
+    let (party_queue_tx, party_queue_rx) = std::sync::mpsc::channel::<(String, String)>();
+    let mut party_notice = None;
+    let mut party_server = std::env::var("CREST_PARTY_PASSWORD")
+        .ok()
+        .and_then(|password| {
+            match party_server::PartyServer::start(password, party_queue_tx.clone()) {
+                Ok(server) => {
+                    party_notice = Some(format!(
+                        "Party Mode: {} · code {}",
+                        server.url, server.access_code
+                    ));
+                    Some(server)
+                }
+                Err(error) => {
+                    party_notice = Some(format!("Party Mode unavailable: {error}"));
+                    None
+                }
+            }
+        });
     let mut autoplay_requested_for: Option<String>;
     let mut lyrics_requested_for: Option<String> = None;
     let mut lyrics_requested_at: Option<Instant> = None;
@@ -502,6 +627,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             process_library_download_completions(&library_download_rx, &mut app);
             player.is_playing();
+            while let Ok((title, video_id)) = party_queue_rx.try_recv() {
+                queue_youtube_download(&mut app, &mut player, &download_tx, &title, &video_id);
+            }
             discord_presence.sync(&app, &player);
             #[cfg(feature = "casting")]
             if let Some(receiver) = &speaker_discovery
@@ -556,6 +684,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         library_track_count: app.library.len(),
                         home_wallpaper: app.home_wallpaper.as_ref(),
                         playback: (player.title.as_deref(), player.status.as_str()),
+                        party_notice: party_notice.as_deref(),
                     },
                 )
             })?;
@@ -632,7 +761,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !settings_page {
                             match startup_selected {
                                 0 | 1 => show_startup = false,
-                                2 => settings_page = true,
+                                2 => {
+                                    if party_server.take().is_some() {
+                                        party_notice = Some("Party Mode stopped.".to_string());
+                                    } else {
+                                        match party_server::PartyServer::start_automatic(
+                                            party_queue_tx.clone(),
+                                        ) {
+                                            Ok(server) => {
+                                                party_notice = Some(format!(
+                                                    "Party Mode: {} · code {}",
+                                                    server.url, server.access_code
+                                                ));
+                                                party_server = Some(server);
+                                            }
+                                            Err(error) => {
+                                                party_notice =
+                                                    Some(format!("Party Mode unavailable: {error}"))
+                                            }
+                                        }
+                                    }
+                                }
+                                3 => settings_page = true,
                                 _ => {}
                             }
                         } else {
@@ -1246,13 +1396,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             // Ctrl+l: Like/download selected
                             if let Some((title, id)) = app.results.get(app.selected).cloned() {
-                                let url = format!("https://www.youtube.com/watch?v={}", id);
                                 let video_cache_plan =
                                     video_cache_plan(&app, screen.width, screen.height);
                                 queue_library_download(
                                     &mut app,
                                     &library_download_tx,
-                                    url,
+                                    id,
                                     title,
                                     video_cache_plan,
                                 );
@@ -1317,6 +1466,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 needs_redraw = true;
             }
             if process_library_download_completions(&library_download_rx, &mut app) {
+                needs_redraw = true;
+            }
+            while let Ok((title, video_id)) = party_queue_rx.try_recv() {
+                queue_youtube_download(&mut app, &mut player, &download_tx, &title, &video_id);
                 needs_redraw = true;
             }
             while let Ok((seed_title, result)) = recommendation_rx.try_recv() {
@@ -1515,7 +1668,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod frame_pacer_tests {
-    use super::FramePacer;
+    use super::{FramePacer, even_cache_dimension, library_download_path, next_stream_queue_path};
+    use std::collections::HashSet;
     use std::time::Duration;
 
     #[test]
@@ -1532,5 +1686,33 @@ mod frame_pacer_tests {
         assert_eq!(pacer.target(0), 30);
         pacer.record(Duration::from_millis(40), 0);
         assert_eq!(pacer.target(0), 24);
+    }
+
+    #[test]
+    fn rapidly_queued_streams_always_get_distinct_paths() {
+        let paths = (0..1_000)
+            .map(|_| next_stream_queue_path())
+            .collect::<HashSet<_>>();
+        assert_eq!(paths.len(), 1_000);
+    }
+
+    #[test]
+    fn cache_dimensions_are_valid_for_yuv420_video() {
+        assert_eq!(even_cache_dimension(0), 2);
+        assert_eq!(even_cache_dimension(81), 80);
+        assert_eq!(even_cache_dimension(82), 82);
+        assert_eq!(even_cache_dimension(u16::MAX), 4096);
+    }
+
+    #[test]
+    fn long_duplicate_titles_keep_distinct_youtube_ids_in_their_paths() {
+        let title = "x".repeat(300);
+        let first =
+            library_download_path(std::path::Path::new("/music"), &title, "aaaaaaaaaaa").unwrap();
+        let second =
+            library_download_path(std::path::Path::new("/music"), &title, "bbbbbbbbbbb").unwrap();
+        assert_ne!(first, second);
+        assert!(first.to_string_lossy().contains("aaaaaaaaaaa"));
+        assert!(second.to_string_lossy().contains("bbbbbbbbbbb"));
     }
 }

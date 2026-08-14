@@ -208,9 +208,10 @@ Sonos, then Bluetooth. On Linux, Bluetooth speaker discovery uses BlueZ's
 `bluetoothctl`, scans only while the Speakers page requests discovery, and filters
 results to audio-sink devices rather than listing keyboards and other peripherals.
 Select speakers with the arrow keys and toggle each one with Enter. Selected devices
-are marked with `●` and play as one speaker group; Sonos and AirPlay devices can be
-mixed. Playback and transport commands are dispatched independently so a slow or
-offline receiver does not block commands to the rest of the group. Results are
+are marked with `●`. Sonos and AirPlay devices can be selected together, but mixed
+protocol outputs do not share a playback clock and may be audibly out of sync.
+Playback and transport commands are dispatched independently so a slow or offline
+receiver does not block commands to the rest of the selection. Results are
 cached for the session; press `R` to rescan or `D` to disconnect the whole group.
 Use `+` and `-` to adjust one shared group volume in five-percent steps. Crest Player
 sends the level concurrently through AirPlay and Sonos protocol controls; Bluetooth
@@ -257,6 +258,24 @@ Pause, resume, stop, and seeking are forwarded to the selected speaker. AirPlay
 devices that require pairing or a password must first be configured with
 `atvremote`. On quit, Crest Player waits for the receiver to acknowledge Stop,
 then terminates and reaps the temporary casting helper and local media server.
+
+### Phone Party Mode
+
+Any phone on the same Wi-Fi can search YouTube and add tracks to Crest Player's
+queue without installing an app. Choose **Party Mode** on the home menu and Crest
+Player automatically detects the host's LAN address, opens a local port, and creates
+a random access code. No router configuration is needed. It shows the phone URL and
+code in the status message; open that address on each phone and enter the code when
+searching. Select **Party Mode** again to stop hosting. To supply a stable code for
+an unattended launch, set `CREST_PARTY_PASSWORD` (at least eight characters).
+
+The operating system may ask once whether Crest Player can accept private-network
+connections. Allow private/local network access; public-network access is unnecessary.
+The server accepts only loopback and same-subnet IPv4 clients, limits request sizes,
+validates YouTube IDs, escapes displayed results, and exposes no filesystem or
+settings operations. It stops automatically with Crest Player. Because the local
+page uses HTTP, use Party Mode only on a trusted private Wi-Fi network; do not
+forward the displayed Party Mode port through the router.
 
 `Esc` clears the command bar. The first input wakes the screensaver and is
 consumed; playback shortcuts continue to work in Ambient and Cinema.

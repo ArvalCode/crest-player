@@ -1,8 +1,8 @@
 //
 use crate::lyrics::fetch_lyrics_with_caption_fallback;
 use crate::security::{
-    MAX_METADATA_BYTES, bounded_output, contained_media_path, external_command,
-    sanitize_display_text_limited, valid_youtube_id,
+    MAX_METADATA_BYTES, bounded_output, external_command, sanitize_display_text_limited,
+    valid_youtube_id,
 };
 use crate::video_cache::build_video_cache;
 use dirs::audio_dir;
@@ -46,13 +46,15 @@ pub fn search_youtube(query: &str) -> Result<Vec<(String, String)>, String> {
 pub fn download_audio(
     url: &str,
     title: &str,
+    path: &std::path::Path,
     video_cache_plan: Option<(u16, u16, u16)>,
 ) -> Result<PathBuf, String> {
     let dir = audio_dir().ok_or_else(|| "the Music directory is unavailable".to_string())?;
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("could not create the Music directory: {error}"))?;
-    let path = contained_media_path(&dir, title, "_ytmusic.mp3")
-        .map_err(|error| format!("could not create a safe output path: {error}"))?;
+    if path.parent() != Some(dir.as_path()) {
+        return Err("the queued output path is outside the Music directory".to_string());
+    }
     let mut command = external_command("yt-dlp");
     let status = command
         .args([
@@ -60,6 +62,7 @@ pub fn download_audio(
             "10",
             "--retries",
             "2",
+            "--force-overwrites",
             "--no-playlist",
             "-f",
             "bestaudio/best",
@@ -86,40 +89,57 @@ pub fn download_audio(
         if let Some((width, height, fps)) = video_cache_plan {
             let video_path = path.with_extension("video.cache");
             let cache_path = path.with_extension("crestvid");
-            let video_downloaded = external_command("yt-dlp")
+            let video_path_string = video_path
+                .to_str()
+                .ok_or_else(|| "the temporary video path is not valid UTF-8".to_string())?;
+            let cache_path_string = cache_path
+                .to_str()
+                .ok_or_else(|| "the video cache path is not valid UTF-8".to_string())?;
+            let video_status = external_command("yt-dlp")
                 .args([
                     "--socket-timeout",
                     "10",
                     "--retries",
                     "2",
+                    "--force-overwrites",
                     "--no-playlist",
                     "-f",
                     "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
                     "-o",
-                    video_path.to_str().unwrap_or_default(),
+                    video_path_string,
                     url,
                 ])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
-                .is_ok_and(|status| status.success());
-            if video_downloaded {
-                let lyrics = fetch_lyrics_with_caption_fallback(title, url).ok();
-                let _ = build_video_cache(
-                    video_path.to_str().unwrap_or_default(),
-                    cache_path.to_str().unwrap_or_default(),
-                    width,
-                    height,
-                    fps,
-                    lyrics.as_ref(),
-                );
+                .map_err(|error| format!("could not start the video download: {error}"))?;
+            if !video_status.success() {
+                let _ = std::fs::remove_file(&video_path);
+                return Err(format!("the video download exited with {video_status}"));
             }
+            let lyrics = fetch_lyrics_with_caption_fallback(title, url).ok();
+            let cache_result = build_video_cache(
+                video_path_string,
+                cache_path_string,
+                width,
+                height,
+                fps,
+                lyrics.as_ref(),
+            );
             let _ = std::fs::remove_file(video_path);
+            cache_result
+                .map_err(|error| format!("could not build the .crestvid cache: {error}"))?;
+            if !cache_path
+                .metadata()
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+            {
+                return Err("the cache builder did not create a .crestvid file".to_string());
+            }
         }
-        Ok(path)
+        Ok(path.to_path_buf())
     } else {
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path);
         Err(format!("yt-dlp exited with {status}"))
     }
 }

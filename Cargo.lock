@@ -183,6 +183,7 @@ dependencies = [
  "dirs",
  "discord-rich-presence",
  "fastrand",
+ "getrandom 0.4.3",
  "ib-romaji",
  "libc",
  "ratatui",
