@@ -51,7 +51,7 @@ New `.crestvid` files are Matroska containers tuned for terminal playback:
 - H.264 video at 700 kbps, capped at 900 kbps
 - YUV420 color and Lanczos scaling at terminal resolution
 - ten-second keyframe boundaries for bounded seeking
-- the x264 `slow` preset for better quality at the target size
+- the x264 `veryfast` preset for substantially faster download-queue completion
 - no audio duplication; the library MP3 remains separate
 - embedded synchronized or plain lyrics when available
 

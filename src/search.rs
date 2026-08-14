@@ -1,12 +1,13 @@
 //
 use crate::lyrics::fetch_lyrics_with_caption_fallback;
 use crate::security::{
-    MAX_METADATA_BYTES, bounded_output, external_command, sanitize_display_text_limited,
-    valid_youtube_id,
+    MAX_METADATA_BYTES, bounded_output, cancellable_status, external_command,
+    sanitize_display_text_limited, valid_youtube_id,
 };
-use crate::video_cache::build_video_cache;
+use crate::video_cache::build_video_cache_cancellable;
 use dirs::audio_dir;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn search_youtube(query: &str) -> Result<Vec<(String, String)>, String> {
     let mut command = external_command("yt-dlp");
@@ -49,6 +50,7 @@ pub fn download_audio(
     title: &str,
     path: &std::path::Path,
     video_cache_plan: Option<(u16, u16, u16)>,
+    cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
     let dir = audio_dir().ok_or_else(|| "the Music directory is unavailable".to_string())?;
     std::fs::create_dir_all(&dir)
@@ -74,8 +76,8 @@ pub fn download_audio(
     let _ = std::fs::remove_file(&source_path);
     let _ = std::fs::remove_file(&audio_part_path);
     let result = (|| {
-        let source_status = external_command("yt-dlp")
-            .args([
+        let mut source_command = external_command("yt-dlp");
+        source_command.args([
                 "--ignore-config",
                 "--socket-timeout",
                 "10",
@@ -97,14 +99,15 @@ pub fn download_audio(
             ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .stderr(std::process::Stdio::null());
+        let source_status = cancellable_status(source_command, cancelled)
             .map_err(|error| format!("could not start the source download: {error}"))?;
         if !source_status.success() || !source_path.is_file() {
             return Err(format!("the source download exited with {source_status}"));
         }
 
-        let audio_status = external_command("ffmpeg")
+        let mut audio_command = external_command("ffmpeg");
+        audio_command
             .args([
                 "-y",
                 "-nostdin",
@@ -123,16 +126,27 @@ pub fn download_audio(
             ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .stderr(std::process::Stdio::null());
+        let audio_status = cancellable_status(audio_command, cancelled)
             .map_err(|error| format!("could not start MP3 conversion: {error}"))?;
         if !audio_status.success() || !playable_audio_file(&audio_part_path) {
             return Err(format!("MP3 conversion failed with {audio_status}"));
         }
 
+        if cancelled.load(Ordering::Acquire) {
+            return Err("download cancelled".to_string());
+        }
         let lyrics = fetch_lyrics_with_caption_fallback(title, url).ok();
-        build_video_cache(source, cache, width, height, fps, lyrics.as_ref())
-            .map_err(|error| format!("could not build the .crestvid cache: {error}"))?;
+        build_video_cache_cancellable(
+            source,
+            cache,
+            width,
+            height,
+            fps,
+            lyrics.as_ref(),
+            cancelled,
+        )
+        .map_err(|error| format!("could not build the .crestvid cache: {error}"))?;
         if !cache_path
             .metadata()
             .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
@@ -140,6 +154,9 @@ pub fn download_audio(
             return Err("the cache builder did not create a .crestvid file".to_string());
         }
 
+        if cancelled.load(Ordering::Acquire) {
+            return Err("download cancelled".to_string());
+        }
         let _ = std::fs::remove_file(path);
         std::fs::rename(&audio_part_path, path)
             .map_err(|error| format!("could not publish the completed MP3: {error}"))?;
@@ -148,6 +165,8 @@ pub fn download_audio(
     let _ = std::fs::remove_file(&source_path);
     if result.is_err() {
         let _ = std::fs::remove_file(&audio_part_path);
+        let _ = std::fs::remove_file(&cache_path);
+        let _ = std::fs::remove_file(format!("{cache}.part"));
     }
     result
 }

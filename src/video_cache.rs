@@ -1,10 +1,11 @@
 use crate::lyrics::Lyrics;
-use crate::security::external_command;
+use crate::security::{cancellable_status, external_command};
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     path::Path,
     process::Stdio,
+    sync::atomic::AtomicBool,
 };
 
 const MAGIC: &[u8; 8] = b"CRESTV1\0";
@@ -29,6 +30,7 @@ struct CachedFrame {
     keyframe: bool,
 }
 
+#[cfg(test)]
 pub fn build_video_cache(
     video_path: &str,
     cache_path: &str,
@@ -36,6 +38,21 @@ pub fn build_video_cache(
     height: u16,
     fps: u16,
     lyrics: Option<&Lyrics>,
+) -> io::Result<()> {
+    let cancelled = AtomicBool::new(false);
+    build_video_cache_cancellable(
+        video_path, cache_path, width, height, fps, lyrics, &cancelled,
+    )
+}
+
+pub fn build_video_cache_cancellable(
+    video_path: &str,
+    cache_path: &str,
+    width: u16,
+    height: u16,
+    fps: u16,
+    lyrics: Option<&Lyrics>,
+    cancelled: &AtomicBool,
 ) -> io::Result<()> {
     if validate_video_parameters(width, height, fps).is_err() {
         return Err(io::Error::new(
@@ -57,6 +74,7 @@ pub fn build_video_cache(
         fps,
         lyrics_path: lyrics.map(|_| lyrics_path.as_str()),
         lyrics_synced: lyrics.map(|lyrics| lyrics.synced),
+        cancelled,
     });
     let _ = std::fs::remove_file(&lyrics_path);
     if result.is_err() {
@@ -75,6 +93,7 @@ struct CacheBuildOptions<'a> {
     fps: u16,
     lyrics_path: Option<&'a str>,
     lyrics_synced: Option<bool>,
+    cancelled: &'a AtomicBool,
 }
 
 fn build_video_cache_inner(options: CacheBuildOptions<'_>) -> io::Result<()> {
@@ -87,6 +106,7 @@ fn build_video_cache_inner(options: CacheBuildOptions<'_>) -> io::Result<()> {
         fps,
         lyrics_path,
         lyrics_synced,
+        cancelled,
     } = options;
     let filter = format!(
         "fps={fps}:round=near,scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
@@ -121,7 +141,7 @@ fn build_video_cache_inner(options: CacheBuildOptions<'_>) -> io::Result<()> {
         "-c:v",
         "libx264",
         "-preset",
-        "slow",
+        "veryfast",
         "-tune",
         "fastdecode",
         "-threads",
@@ -160,12 +180,12 @@ fn build_video_cache_inner(options: CacheBuildOptions<'_>) -> io::Result<()> {
             &format!("crest_synced={synced}"),
         ]);
     }
-    let status = command
+    command
         .args(["-pix_fmt", "yuv420p", "-f", "matroska", temporary_path])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
+        .stderr(Stdio::null());
+    let status = cancellable_status(command, cancelled)?;
     if !status.success()
         || std::fs::metadata(temporary_path)
             .map(|metadata| metadata.len() == 0)

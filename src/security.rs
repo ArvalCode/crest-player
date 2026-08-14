@@ -3,6 +3,8 @@ use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 pub const MAX_METADATA_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_LYRICS_BYTES: usize = 4 * 1024 * 1024;
@@ -88,6 +90,21 @@ pub fn contained_media_path(root: &Path, title: &str, suffix: &str) -> io::Resul
 /// relative PATH entry from executing a program planted in the working directory.
 pub fn external_command(name: &str) -> Command {
     Command::new(external_command_path(name).unwrap_or_else(|| missing_executable_path(name)))
+}
+
+pub fn cancellable_status(mut command: Command, cancelled: &AtomicBool) -> io::Result<ExitStatus> {
+    let mut child = command.spawn()?;
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "job cancelled"));
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 pub fn external_command_path(name: &str) -> Option<PathBuf> {
