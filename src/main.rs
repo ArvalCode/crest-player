@@ -1590,9 +1590,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     // Save and load library to a file in the Music directory
-    player.stop();
-    player.cleanup_temp_media();
-    player.queue.clear();
+    player.shutdown();
     disable_raw_mode()?;
     execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
 

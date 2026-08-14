@@ -249,6 +249,18 @@ impl Player {
         // Do not clear the queue here; only clear on quit
     }
 
+    pub fn shutdown(&mut self) {
+        self.stop();
+        self.queue.clear();
+        #[cfg(feature = "casting")]
+        {
+            // `off` also clears selected targets, ensuring Bluetooth is
+            // disconnected and network speakers receive a final stop command.
+            let _ = self.caster.off();
+        }
+        self.cleanup_temp_media();
+    }
+
     pub fn last_finished_title(&self) -> Option<&str> {
         self.last_finished_title.as_deref()
     }
@@ -523,10 +535,8 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        // Normal quit paths call stop explicitly, but this also covers early
-        // returns caused by terminal or rendering errors.
-        self.stop();
-        self.cleanup_temp_media();
+        // Also covers early returns caused by terminal or rendering errors.
+        self.shutdown();
     }
 }
 
