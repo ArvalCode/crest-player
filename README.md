@@ -35,6 +35,11 @@ start only after their temporary MP3 is completely downloaded, avoiding playback
 interruptions from expiring or stalled remote media URLs. Permanent `Ctrl+L`
 downloads save an MP3 and build its reusable video cache.
 
+Permanent downloads use a dedicated FIFO manager. The queue marks waiting songs
+as **Queued** and the single active song as **Downloading**. A job leaves the
+queue only after its validated MP3 and `.crestvid` pair has been published, or
+after all retry attempts return a visible error.
+
 Temporary MP3s are deleted after playback or when their pending queue entries
 are removed. Because `ffplay` reads a finalized local file, network interruptions
 cannot put queued playback into a reconnect loop.

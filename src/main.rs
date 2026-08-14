@@ -4,6 +4,7 @@ mod casting;
 mod desktop_integration;
 mod discord_presence;
 mod download_commands;
+mod download_manager;
 mod download_queue_ui;
 mod draw_startup_screen;
 mod idle_mode;
@@ -37,6 +38,7 @@ use crossterm::{
 };
 use discord_presence::DiscordPresence;
 use download_commands::DownloadCommand;
+use download_manager::{DownloadEvent as LibraryDownloadEvent, DownloadManager, DownloadRequest};
 use draw_startup_screen::{
     DELETE_MEDIA_SETTING, HOME_OPTION_COUNT, REMOVE_APPLICATION_SETTING, RESET_WALLPAPER_SETTING,
     SETTINGS_OPTION_COUNT, StartupScreenState, draw_startup_screen,
@@ -47,7 +49,7 @@ use player::Player;
 use ratatui::Terminal;
 use ratatui::prelude::CrosstermBackend;
 use recommendations::{Recommendation, youtube_mix_recommendation};
-use search::{download_audio, playable_audio_file, search_youtube};
+use search::{playable_audio_file, search_youtube};
 use security::{contained_media_path, external_command, valid_youtube_id};
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -169,85 +171,6 @@ struct DownloadFinished {
     duration: Option<Duration>,
     autoplay: bool,
     success: bool,
-}
-
-struct LibraryDownloadFinished {
-    title: String,
-    path: String,
-    error: Option<String>,
-}
-
-struct LibraryDownloadRequest {
-    title: String,
-    url: String,
-    path: String,
-    video_cache_plan: Option<(u16, u16, u16)>,
-}
-
-fn start_library_download_worker(
-    receiver: std::sync::mpsc::Receiver<LibraryDownloadRequest>,
-    sender: std::sync::mpsc::Sender<LibraryDownloadFinished>,
-) {
-    // Keep multiple queued songs moving without starting an unbounded number of
-    // yt-dlp/FFmpeg processes. Each worker still owns one complete MP3/cache
-    // pair, and the shared receiver hands every request to exactly one worker.
-    const WORKER_COUNT: usize = 2;
-    let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
-    for _ in 0..WORKER_COUNT {
-        let receiver = std::sync::Arc::clone(&receiver);
-        let sender = sender.clone();
-        std::thread::spawn(move || {
-            loop {
-                let request = {
-                    let Ok(receiver) = receiver.lock() else {
-                        return;
-                    };
-                    let Ok(request) = receiver.recv() else {
-                        return;
-                    };
-                    request
-                };
-                let downloaded = retry_library_download(&request, 3);
-                let (path, error) = match downloaded {
-                    Ok(path) => (path.to_string_lossy().into_owned(), None),
-                    Err(error) => (request.path, Some(error)),
-                };
-                if sender
-                    .send(LibraryDownloadFinished {
-                        title: request.title,
-                        path,
-                        error,
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
-    }
-}
-
-fn retry_library_download(
-    request: &LibraryDownloadRequest,
-    max_attempts: usize,
-) -> Result<std::path::PathBuf, String> {
-    let mut errors = Vec::new();
-    for attempt in 1..=max_attempts.max(1) {
-        let result = std::panic::catch_unwind(|| {
-            download_audio(
-                &request.url,
-                &request.title,
-                std::path::Path::new(&request.path),
-                request.video_cache_plan,
-            )
-        })
-        .unwrap_or_else(|_| Err("the download process stopped unexpectedly".to_string()));
-        match result {
-            Ok(path) => return Ok(path),
-            Err(error) => errors.push(format!("attempt {attempt}: {error}")),
-        }
-    }
-    Err(errors.join("; "))
 }
 
 fn next_stream_queue_path() -> String {
@@ -387,7 +310,7 @@ fn process_download_completions(
 
 fn queue_library_download(
     app: &mut App,
-    sender: &std::sync::mpsc::Sender<LibraryDownloadRequest>,
+    manager: &DownloadManager,
     video_id: String,
     title: String,
     video_cache_plan: Option<(u16, u16, u16)>,
@@ -425,10 +348,11 @@ fn queue_library_download(
         app.error = Some(format!("{title} is already downloading."));
         return;
     }
-    app.start_download(path_string.clone(), title.clone());
+    app.start_queued_download(path_string.clone(), title.clone());
     app.error = Some(format!("Queued {title} for download."));
-    if sender
-        .send(LibraryDownloadRequest {
+    if manager
+        .enqueue(DownloadRequest {
+            id: path_string.clone(),
             title,
             url,
             path: path_string.clone(),
@@ -469,32 +393,47 @@ fn even_cache_dimension(value: u16) -> u16 {
     value.clamp(2, 4096) & !1
 }
 
-fn process_library_download_completions(
-    receiver: &std::sync::mpsc::Receiver<LibraryDownloadFinished>,
-    app: &mut App,
-) -> bool {
+fn process_library_download_completions(manager: &DownloadManager, app: &mut App) -> bool {
     let mut changed = false;
-    while let Ok(download) = receiver.try_recv() {
-        let cancelled = app.finish_download(&download.path);
+    let mut completed_titles = Vec::new();
+    let mut failures = Vec::new();
+    while let Ok(event) = manager.try_recv() {
+        let LibraryDownloadEvent::Finished {
+            id,
+            title,
+            path,
+            error,
+        } = event
+        else {
+            if let LibraryDownloadEvent::Started { id } = event {
+                app.mark_download_started(&id);
+                changed = true;
+            }
+            continue;
+        };
+        let cancelled = app.finish_download(&id);
         if cancelled {
-            let _ = std::fs::remove_file(&download.path);
-            let _ = std::fs::remove_file(
-                std::path::Path::new(&download.path).with_extension("crestvid"),
-            );
-        } else if download.error.is_none() {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(std::path::Path::new(&path).with_extension("crestvid"));
+        } else if error.is_none() {
             // This also refreshes availability when an indexed file was missing
             // and the user downloaded it again.
-            app.error = Some(format!("Downloaded {}.", download.title));
-            app.add_library_track(download.title, download.path);
+            completed_titles.push(title.clone());
+            app.add_library_track(title, path);
             save_library(&app.library);
         } else {
-            app.error = Some(format!(
-                "Failed to download {}: {}",
-                download.title,
-                download.error.as_deref().unwrap_or("unknown error")
+            failures.push(format!(
+                "{}: {}",
+                title,
+                error.as_deref().unwrap_or("unknown error")
             ));
         }
         changed = true;
+    }
+    if !failures.is_empty() {
+        app.error = Some(format!("Failed to download {}", failures.join(" | ")));
+    } else if !completed_titles.is_empty() {
+        app.error = Some(format!("Downloaded {}.", completed_titles.join(", ")));
     }
     changed
 }
@@ -569,11 +508,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_rendered_video_second = 0u64;
     let (lyrics_tx, lyrics_rx) = std::sync::mpsc::channel::<(String, Result<Lyrics, String>)>();
     let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadFinished>();
-    let (library_download_finished_tx, library_download_rx) =
-        std::sync::mpsc::channel::<LibraryDownloadFinished>();
-    let (library_download_tx, library_download_request_rx) =
-        std::sync::mpsc::channel::<LibraryDownloadRequest>();
-    start_library_download_worker(library_download_request_rx, library_download_finished_tx);
+    let library_downloads = DownloadManager::new();
     let (recommendation_tx, recommendation_rx) =
         std::sync::mpsc::channel::<(String, Result<Recommendation, String>)>();
     let (party_queue_tx, party_queue_rx) = std::sync::mpsc::channel::<(String, String)>();
@@ -628,7 +563,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &mut app,
                 &mut video_screensaver,
             );
-            process_library_download_completions(&library_download_rx, &mut app);
+            process_library_download_completions(&library_downloads, &mut app);
             player.is_playing();
             while let Ok((title, video_id)) = party_queue_rx.try_recv() {
                 queue_youtube_download(&mut app, &mut player, &download_tx, &title, &video_id);
@@ -1403,7 +1338,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     video_cache_plan(&app, screen.width, screen.height);
                                 queue_library_download(
                                     &mut app,
-                                    &library_download_tx,
+                                    &library_downloads,
                                     id,
                                     title,
                                     video_cache_plan,
@@ -1468,7 +1403,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ) {
                 needs_redraw = true;
             }
-            if process_library_download_completions(&library_download_rx, &mut app) {
+            if process_library_download_completions(&library_downloads, &mut app) {
                 needs_redraw = true;
             }
             while let Ok((title, video_id)) = party_queue_rx.try_recv() {

@@ -9,6 +9,13 @@ use std::collections::HashSet;
 pub struct DownloadJob {
     pub path: String,
     pub title: String,
+    pub state: DownloadState,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum DownloadState {
+    Queued,
+    Downloading,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -170,7 +177,25 @@ impl App {
     }
 
     pub fn start_download(&mut self, path: String, title: String) {
-        self.downloads.push(DownloadJob { path, title });
+        self.downloads.push(DownloadJob {
+            path,
+            title,
+            state: DownloadState::Downloading,
+        });
+    }
+
+    pub fn start_queued_download(&mut self, path: String, title: String) {
+        self.downloads.push(DownloadJob {
+            path,
+            title,
+            state: DownloadState::Queued,
+        });
+    }
+
+    pub fn mark_download_started(&mut self, path: &str) {
+        if let Some(job) = self.downloads.iter_mut().find(|job| job.path == path) {
+            job.state = DownloadState::Downloading;
+        }
     }
 
     /// Remove a completed job and report whether cleanup cancelled it.

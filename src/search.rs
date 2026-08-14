@@ -56,98 +56,100 @@ pub fn download_audio(
     if path.parent() != Some(dir.as_path()) {
         return Err("the queued output path is outside the Music directory".to_string());
     }
-    let mut command = external_command("yt-dlp");
-    let status = command
-        .args([
-            "--ignore-config",
-            "--socket-timeout",
-            "10",
-            "--retries",
-            "2",
-            "--fragment-retries",
-            "5",
-            "--force-overwrites",
-            "--no-playlist",
-            "-f",
-            "bestaudio/best",
-            "-x",
-            "--audio-format",
-            "mp3",
-            "-o",
-            path.to_str()
-                .ok_or_else(|| "the output path is not valid UTF-8".to_string())?,
-            url,
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|error| format!("could not start yt-dlp: {error}"))?;
-    if status.success() {
-        let valid_output = playable_audio_file(path);
-        if !valid_output {
-            let _ = std::fs::remove_file(path);
-            return Err("yt-dlp did not create a complete playable MP3".to_string());
+    let (width, height, fps) = video_cache_plan
+        .ok_or_else(|| "a .crestvid cache plan is required for every download".to_string())?;
+    let source_path = path.with_extension("download.mkv");
+    let audio_part_path = path.with_extension("mp3.part");
+    let cache_path = path.with_extension("crestvid");
+    let source = source_path
+        .to_str()
+        .ok_or_else(|| "the temporary source path is not valid UTF-8".to_string())?;
+    let audio_part = audio_part_path
+        .to_str()
+        .ok_or_else(|| "the temporary MP3 path is not valid UTF-8".to_string())?;
+    let cache = cache_path
+        .to_str()
+        .ok_or_else(|| "the video cache path is not valid UTF-8".to_string())?;
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&audio_part_path);
+    let result = (|| {
+        let source_status = external_command("yt-dlp")
+            .args([
+                "--ignore-config",
+                "--socket-timeout",
+                "10",
+                "--retries",
+                "3",
+                "--fragment-retries",
+                "10",
+                "--force-overwrites",
+                "--no-playlist",
+                "-f",
+                "bestvideo[vcodec^=avc1][height<=720]+bestaudio/bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "--merge-output-format",
+                "mkv",
+                "--remux-video",
+                "mkv",
+                "-o",
+                source,
+                url,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|error| format!("could not start the source download: {error}"))?;
+        if !source_status.success() || !source_path.is_file() {
+            return Err(format!("the source download exited with {source_status}"));
         }
-        if let Some((width, height, fps)) = video_cache_plan {
-            let video_path = path.with_extension("video.cache");
-            let cache_path = path.with_extension("crestvid");
-            let video_path_string = video_path
-                .to_str()
-                .ok_or_else(|| "the temporary video path is not valid UTF-8".to_string())?;
-            let cache_path_string = cache_path
-                .to_str()
-                .ok_or_else(|| "the video cache path is not valid UTF-8".to_string())?;
-            let video_status = external_command("yt-dlp")
-                .args([
-                    "--ignore-config",
-                    "--socket-timeout",
-                    "10",
-                    "--retries",
-                    "2",
-                    "--fragment-retries",
-                    "5",
-                    "--force-overwrites",
-                    "--no-playlist",
-                    "-f",
-                    "bestvideo[height<=720]/bestvideo/best[height<=720]/best",
-                    "-o",
-                    video_path_string,
-                    url,
-                ])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(|error| format!("could not start the video download: {error}"))?;
-            if !video_status.success() {
-                let _ = std::fs::remove_file(&video_path);
-                return Err(format!("the video download exited with {video_status}"));
-            }
-            let lyrics = fetch_lyrics_with_caption_fallback(title, url).ok();
-            let cache_result = build_video_cache(
-                video_path_string,
-                cache_path_string,
-                width,
-                height,
-                fps,
-                lyrics.as_ref(),
-            );
-            let _ = std::fs::remove_file(video_path);
-            cache_result
-                .map_err(|error| format!("could not build the .crestvid cache: {error}"))?;
-            if !cache_path
-                .metadata()
-                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-            {
-                return Err("the cache builder did not create a .crestvid file".to_string());
-            }
+
+        let audio_status = external_command("ffmpeg")
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-i",
+                source,
+                "-vn",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                "-f",
+                "mp3",
+                audio_part,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|error| format!("could not start MP3 conversion: {error}"))?;
+        if !audio_status.success() || !playable_audio_file(&audio_part_path) {
+            return Err(format!("MP3 conversion failed with {audio_status}"));
         }
-        Ok(path.to_path_buf())
-    } else {
+
+        let lyrics = fetch_lyrics_with_caption_fallback(title, url).ok();
+        build_video_cache(source, cache, width, height, fps, lyrics.as_ref())
+            .map_err(|error| format!("could not build the .crestvid cache: {error}"))?;
+        if !cache_path
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+        {
+            return Err("the cache builder did not create a .crestvid file".to_string());
+        }
+
         let _ = std::fs::remove_file(path);
-        Err(format!("yt-dlp exited with {status}"))
+        std::fs::rename(&audio_part_path, path)
+            .map_err(|error| format!("could not publish the completed MP3: {error}"))?;
+        Ok(path.to_path_buf())
+    })();
+    let _ = std::fs::remove_file(&source_path);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&audio_part_path);
     }
+    result
 }
 
 pub fn playable_audio_file(path: &std::path::Path) -> bool {
