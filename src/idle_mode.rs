@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Paragraph},
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -169,26 +169,9 @@ pub fn draw_idle_mode(frame: &mut Frame, state: IdleRenderState<'_>) {
         area,
     );
 
-    let margin = match stage {
-        IdleStage::Ambient => 1,
-        IdleStage::Cinema | IdleStage::Active => 0,
-    };
-    let visual_area = inset(area, margin);
-    let bordered = stage != IdleStage::Cinema;
-    let inner = if bordered {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(match stage {
-                IdleStage::Ambient => " AMBIENT · ` capture wallpaper · any other input to return ",
-                _ => "",
-            })
-            .border_style(Style::default().fg(Color::DarkGray));
-        let inner = block.inner(visual_area);
-        frame.render_widget(block, visual_area);
-        inner
-    } else {
-        visual_area
-    };
+    // Video always owns the complete terminal frame. Status, lyrics, and clock
+    // are overlays and must never reduce its drawable cell area.
+    let inner = area;
 
     let seconds = position.as_secs_f32();
     for y in 0..inner.height {
@@ -373,15 +356,6 @@ fn video_color(frame: &VideoFrame, area: Rect, x: u16, y: u16) -> Option<Color> 
         *frame.pixels.get(index + 1)?,
         *frame.pixels.get(index + 2)?,
     ))
-}
-
-fn inset(area: Rect, margin: u16) -> Rect {
-    Rect::new(
-        area.x.saturating_add(margin),
-        area.y.saturating_add(margin),
-        area.width.saturating_sub(margin.saturating_mul(2)),
-        area.height.saturating_sub(margin.saturating_mul(2)),
-    )
 }
 
 fn pixel_color(x: u16, y: u16, area: Rect, time: f32) -> Color {
